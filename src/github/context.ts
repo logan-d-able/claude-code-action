@@ -102,6 +102,11 @@ type BaseContext = {
     includeFixLinks: boolean;
     includeCommentsByActor: string;
     excludeCommentsByActor: string;
+    multiAgentReview: boolean;
+    reviewAgents?: string;
+    reviewDebateRounds: number;
+    reviewMaxAgents: number;
+    reviewProtocolPath?: string;
   };
 };
 
@@ -164,6 +169,11 @@ export function parseGitHubContext(): GitHubContext {
       includeFixLinks: process.env.INCLUDE_FIX_LINKS === "true",
       includeCommentsByActor: process.env.INCLUDE_COMMENTS_BY_ACTOR ?? "",
       excludeCommentsByActor: process.env.EXCLUDE_COMMENTS_BY_ACTOR ?? "",
+      multiAgentReview: process.env.MULTI_AGENT_REVIEW === "true",
+      reviewAgents: process.env.REVIEW_AGENTS || undefined,
+      reviewDebateRounds: parseInt(process.env.REVIEW_DEBATE_ROUNDS || "1", 10),
+      reviewMaxAgents: parseInt(process.env.REVIEW_MAX_AGENTS || "5", 10),
+      reviewProtocolPath: process.env.REVIEW_PROTOCOL_PATH || undefined,
     },
   };
 

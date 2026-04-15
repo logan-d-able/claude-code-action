@@ -9,9 +9,18 @@ import {
 } from "../github/context";
 import { checkContainsTrigger } from "../github/validation/trigger";
 
-export type AutoDetectedMode = "tag" | "agent";
+export type AutoDetectedMode = "tag" | "agent" | "review";
 
 export function detectMode(context: GitHubContext): AutoDetectedMode {
+  // Multi-agent review mode: PR context + multiAgentReview flag
+  if (
+    context.inputs.multiAgentReview &&
+    isEntityContext(context) &&
+    context.isPR
+  ) {
+    return "review";
+  }
+
   // Validate track_progress usage
   if (context.inputs.trackProgress) {
     validateTrackProgressEvent(context);
