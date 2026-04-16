@@ -38,6 +38,7 @@ type ReviewResult = {
     claudeBranch: string | undefined;
   };
   executionFile?: string;
+  claudeSuccess: boolean;
 };
 
 export async function prepareAndRunReview({
@@ -123,6 +124,16 @@ export async function prepareAndRunReview({
   );
   const trackingCommentId = await tracker.createComment(context.entityNumber);
 
+  // Create a separate comment for the synthesis review
+  // This prevents the tracker from overwriting the final review
+  const synthesisComment = await octokit.rest.issues.createComment({
+    owner: context.repository.owner,
+    repo: context.repository.repo,
+    issue_number: context.entityNumber,
+    body: "⏳ *Multi-agent review in progress...*",
+  });
+  const synthesisCommentId = synthesisComment.data.id;
+
   // Prepare MCP config (read-only for review agents)
   const mcpConfig = await prepareMcpConfig({
     githubToken,
@@ -139,58 +150,71 @@ export async function prepareAndRunReview({
   const baseClaudeArgs = buildBaseClaudeArgs(mcpConfig);
   const executionFiles: string[] = [];
 
-  // === Round 1: Independent Reviews ===
+  // === Round 1: Independent Reviews (parallel) ===
   const allFindings: AgentFindings[] = [];
 
-  for (const agent of agents) {
-    await tracker.updateAgentStatus(agent.name, "running");
-
-    try {
+  const round1Results = await Promise.allSettled(
+    agents.map(async (agent) => {
+      await tracker.updateAgentStatus(agent.name, "running");
       const findings = await runReviewAgent(
         agent,
         githubContextMarkdown,
         baseClaudeArgs,
         `review-r1-${agent.id}`,
       );
-
-      allFindings.push(findings);
       await tracker.updateAgentStatus(agent.name, "complete", findings);
+      return {
+        agentId: agent.id,
+        findings,
+      };
+    }),
+  );
 
-      // Collect execution file
-      const execFile = `${process.env.RUNNER_TEMP}/claude-execution-review-r1-${agent.id}.json`;
-      executionFiles.push(execFile);
-    } catch (error) {
-      core.warning(`Agent ${agent.id} failed: ${error}`);
-      await tracker.updateAgentStatus(agent.name, "error");
+  for (const [i, result] of round1Results.entries()) {
+    if (result.status === "fulfilled") {
+      allFindings.push(result.value.findings);
+      executionFiles.push(
+        `${process.env.RUNNER_TEMP}/claude-execution-review-r1-${result.value.agentId}.json`,
+      );
+    } else {
+      core.warning(`Agent ${agents[i]!.id} failed: ${result.reason}`);
+      await tracker.updateAgentStatus(agents[i]!.name, "error");
     }
   }
 
-  // === Round 2: Debate ===
+  // === Round 2: Debate (parallel) ===
   const allRebuttals: AgentRebuttal[] = [];
 
   if (debateRounds > 0 && allFindings.length > 1) {
     await tracker.updateDebateStatus("running");
 
-    for (const agent of agents) {
-      const ownFindings = allFindings.find((f) => f.agent_id === agent.id);
-      if (!ownFindings) continue;
+    const debateResults = await Promise.allSettled(
+      agents
+        .filter((agent) => allFindings.some((f) => f.agent_id === agent.id))
+        .map(async (agent) => {
+          const ownFindings = allFindings.find((f) => f.agent_id === agent.id)!;
+          const otherFindings = allFindings.filter(
+            (f) => f.agent_id !== agent.id,
+          );
+          const rebuttal = await runDebateAgent(
+            agent,
+            ownFindings,
+            otherFindings,
+            baseClaudeArgs,
+            `review-r2-${agent.id}`,
+          );
+          return { agentId: agent.id, rebuttal };
+        }),
+    );
 
-      const otherFindings = allFindings.filter((f) => f.agent_id !== agent.id);
-
-      try {
-        const rebuttal = await runDebateAgent(
-          agent,
-          ownFindings,
-          otherFindings,
-          baseClaudeArgs,
-          `review-r2-${agent.id}`,
+    for (const result of debateResults) {
+      if (result.status === "fulfilled") {
+        allRebuttals.push(result.value.rebuttal);
+        executionFiles.push(
+          `${process.env.RUNNER_TEMP}/claude-execution-review-r2-${result.value.agentId}.json`,
         );
-        allRebuttals.push(rebuttal);
-
-        const execFile = `${process.env.RUNNER_TEMP}/claude-execution-review-r2-${agent.id}.json`;
-        executionFiles.push(execFile);
-      } catch (error) {
-        core.warning(`Debate agent ${agent.id} failed: ${error}`);
+      } else {
+        core.warning(`Debate agent failed: ${result.reason}`);
       }
     }
 
@@ -200,23 +224,50 @@ export async function prepareAndRunReview({
   }
 
   // === Synthesis ===
+  let synthesisSuccess = false;
   await tracker.updateSynthesisStatus("running");
 
-  try {
-    await runSynthesisAgent(
-      synthesisPerspective,
-      allFindings,
-      allRebuttals,
-      githubToken,
-      context,
-      trackingCommentId,
-    );
+  if (allFindings.length > 0) {
+    try {
+      await runSynthesisAgent(
+        synthesisPerspective,
+        allFindings,
+        allRebuttals,
+        githubToken,
+        context,
+        synthesisCommentId,
+      );
 
-    const execFile = `${process.env.RUNNER_TEMP}/claude-execution-review-synthesis.json`;
-    executionFiles.push(execFile);
-    await tracker.updateSynthesisStatus("complete");
-  } catch (error) {
-    core.warning(`Synthesis agent failed: ${error}`);
+      const execFile = `${process.env.RUNNER_TEMP}/claude-execution-review-synthesis.json`;
+      executionFiles.push(execFile);
+      synthesisSuccess = true;
+      await tracker.updateSynthesisStatus("complete");
+    } catch (error) {
+      core.warning(`Synthesis agent failed: ${error}`);
+      await tracker.updateSynthesisStatus("error");
+
+      // Fallback: post raw findings as markdown
+      try {
+        const fallback = formatFindingsAsFallback(allFindings, allRebuttals);
+        await octokit.rest.issues.updateComment({
+          owner: context.repository.owner,
+          repo: context.repository.repo,
+          comment_id: synthesisCommentId,
+          body: fallback,
+        });
+        synthesisSuccess = true; // Fallback posted successfully
+      } catch (fallbackError) {
+        core.warning(`Failed to post fallback review: ${fallbackError}`);
+      }
+    }
+  } else {
+    // No findings at all — update synthesis comment
+    await octokit.rest.issues.updateComment({
+      owner: context.repository.owner,
+      repo: context.repository.repo,
+      comment_id: synthesisCommentId,
+      body: "## 🔍 Multi-Agent Peer Review\n\nNo agents produced findings. Review could not be completed.",
+    });
     await tracker.updateSynthesisStatus("error");
   }
 
@@ -232,7 +283,22 @@ export async function prepareAndRunReview({
       claudeBranch: branchInfo.claudeBranch,
     },
     executionFile: mergedExecutionFile,
+    claudeSuccess: allFindings.length > 0 && synthesisSuccess,
   };
+}
+
+function validateStructuredOutput<T>(
+  raw: string,
+  requiredFields: string[],
+  label: string,
+): T {
+  const parsed = JSON.parse(raw);
+  for (const field of requiredFields) {
+    if (parsed[field] === undefined) {
+      throw new Error(`${label}: missing required field '${field}'`);
+    }
+  }
+  return parsed as T;
 }
 
 async function runReviewAgent(
@@ -263,7 +329,11 @@ async function runReviewAgent(
     throw new Error(`Agent ${agent.id} did not produce structured output`);
   }
 
-  return JSON.parse(result.structuredOutput) as AgentFindings;
+  return validateStructuredOutput<AgentFindings>(
+    result.structuredOutput,
+    ["agent_id", "agent_name", "summary", "findings"],
+    `Agent ${agent.id}`,
+  );
 }
 
 async function runDebateAgent(
@@ -301,7 +371,11 @@ async function runDebateAgent(
     );
   }
 
-  return JSON.parse(result.structuredOutput) as AgentRebuttal;
+  return validateStructuredOutput<AgentRebuttal>(
+    result.structuredOutput,
+    ["agent_id", "agent_name", "responses"],
+    `Debate agent ${agent.id}`,
+  );
 }
 
 async function runSynthesisAgent(
@@ -310,7 +384,7 @@ async function runSynthesisAgent(
   allRebuttals: AgentRebuttal[],
   githubToken: string,
   context: ParsedGitHubContext,
-  trackingCommentId: number,
+  synthesisCommentId: number,
 ): Promise<ClaudeRunResult> {
   const promptPath = await generateSynthesisPrompt(
     synthesisPerspective,
@@ -326,7 +400,7 @@ async function runSynthesisAgent(
     repo: context.repository.repo,
     branch: "",
     baseBranch: "",
-    claudeCommentId: trackingCommentId.toString(),
+    claudeCommentId: synthesisCommentId.toString(),
     allowedTools: ["mcp__github_comment__update_claude_comment"],
     mode: "review",
     context,
@@ -365,13 +439,58 @@ ${context.repository.owner}/${context.repository.repo}`);
     sections.push(
       `## PR Context\n${formatContext(githubData.contextData, true)}`,
     );
-  }
 
-  if (githubData.contextData.body) {
-    sections.push(
-      `## PR Description\n${formatBody(githubData.contextData.body, githubData.imageUrlMap || new Map())}`,
-    );
+    if (githubData.contextData.body) {
+      sections.push(
+        `## PR Description\n${formatBody(githubData.contextData.body, githubData.imageUrlMap || new Map())}`,
+      );
+    }
   }
 
   return sections.join("\n\n");
+}
+
+function formatFindingsAsFallback(
+  allFindings: AgentFindings[],
+  allRebuttals: AgentRebuttal[],
+): string {
+  const parts: string[] = [];
+
+  parts.push("## 🔍 Multi-Agent Peer Review Results");
+  parts.push(
+    "*Note: Synthesis agent failed. Showing raw findings from individual reviewers.*\n",
+  );
+
+  for (const f of allFindings) {
+    parts.push(`### ${f.agent_name}`);
+    parts.push(f.summary);
+
+    if (f.overall_assessment) {
+      parts.push(`**Overall:** ${f.overall_assessment}`);
+    }
+
+    parts.push("");
+    for (const finding of f.findings) {
+      const loc = finding.file
+        ? ` (\`${finding.file}${finding.line ? `:${finding.line}` : ""}\`)`
+        : "";
+      parts.push(
+        `- **[${finding.severity.toUpperCase()}]** ${finding.title}: ${finding.description}${loc}`,
+      );
+    }
+    parts.push("");
+  }
+
+  if (allRebuttals.length > 0) {
+    parts.push("### Debate Responses\n");
+    for (const r of allRebuttals) {
+      for (const resp of r.responses) {
+        parts.push(
+          `- **${r.agent_name}** re: ${resp.regarding_finding_title} → *${resp.stance}*: ${resp.reasoning}`,
+        );
+      }
+    }
+  }
+
+  return parts.join("\n");
 }

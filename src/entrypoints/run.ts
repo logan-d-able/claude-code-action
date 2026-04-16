@@ -255,13 +255,13 @@ async function run() {
       claudeBranch = reviewResult.branchInfo.claudeBranch;
       baseBranch = reviewResult.branchInfo.baseBranch;
       executionFile = reviewResult.executionFile;
-      claudeSuccess = true;
+      claudeSuccess = reviewResult.claudeSuccess;
       prepareCompleted = true;
 
       if (executionFile) {
         core.setOutput("execution_file", executionFile);
       }
-      core.setOutput("conclusion", "success");
+      core.setOutput("conclusion", claudeSuccess ? "success" : "failure");
     } else {
       // Tag/Agent mode: standard prepare + single runClaude()
       console.log(

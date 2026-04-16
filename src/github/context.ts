@@ -171,8 +171,14 @@ export function parseGitHubContext(): GitHubContext {
       excludeCommentsByActor: process.env.EXCLUDE_COMMENTS_BY_ACTOR ?? "",
       multiAgentReview: process.env.MULTI_AGENT_REVIEW === "true",
       reviewAgents: process.env.REVIEW_AGENTS || undefined,
-      reviewDebateRounds: parseInt(process.env.REVIEW_DEBATE_ROUNDS || "1", 10),
-      reviewMaxAgents: parseInt(process.env.REVIEW_MAX_AGENTS || "5", 10),
+      reviewDebateRounds: Math.max(
+        0,
+        parseInt(process.env.REVIEW_DEBATE_ROUNDS || "1", 10) || 1,
+      ),
+      reviewMaxAgents: Math.max(
+        1,
+        parseInt(process.env.REVIEW_MAX_AGENTS || "5", 10) || 5,
+      ),
       reviewProtocolPath: process.env.REVIEW_PROTOCOL_PATH || undefined,
     },
   };

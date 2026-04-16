@@ -47,7 +47,7 @@ describe("ReviewTracker", () => {
     expect(commentId).toBe(12345);
     expect(createCommentMock).toHaveBeenCalledTimes(1);
 
-    const call = createCommentMock.mock.calls[0][0];
+    const call = createCommentMock.mock.calls[0]![0];
     expect(call.owner).toBe("test-owner");
     expect(call.repo).toBe("test-repo");
     expect(call.issue_number).toBe(42);
@@ -69,7 +69,7 @@ describe("ReviewTracker", () => {
     await tracker.updateAgentStatus("Critic Reviewer", "running");
 
     expect(updateCommentMock).toHaveBeenCalledTimes(1);
-    const body = updateCommentMock.mock.calls[0][0].body;
+    const body = updateCommentMock.mock.calls[0]![0].body;
     expect(body).toContain("⏳");
     expect(body).toContain("Running");
   });
@@ -108,7 +108,7 @@ describe("ReviewTracker", () => {
 
     await tracker.updateAgentStatus("Critic Reviewer", "complete", findings);
 
-    const body = updateCommentMock.mock.calls[0][0].body;
+    const body = updateCommentMock.mock.calls[0]![0].body;
     expect(body).toContain("✅");
     expect(body).toContain("2 critical");
     expect(body).toContain("1 warning");
@@ -124,12 +124,12 @@ describe("ReviewTracker", () => {
     await tracker.createComment(42);
 
     await tracker.updateDebateStatus("running");
-    let body = updateCommentMock.mock.calls[0][0].body;
+    let body = updateCommentMock.mock.calls[0]![0].body;
     expect(body).toContain("Debate Round");
     expect(body).toContain("⏳");
 
     await tracker.updateDebateStatus("complete");
-    body = updateCommentMock.mock.calls[1][0].body;
+    body = updateCommentMock.mock.calls[1]![0].body;
     expect(body).toContain("✅");
   });
 
@@ -144,7 +144,7 @@ describe("ReviewTracker", () => {
 
     await tracker.updateSynthesisStatus("complete");
 
-    const body = updateCommentMock.mock.calls[0][0].body;
+    const body = updateCommentMock.mock.calls[0]![0].body;
     expect(body).toContain("Synthesis");
     expect(body).toContain("✅");
   });
@@ -174,7 +174,7 @@ describe("ReviewTracker", () => {
 
     await tracker.updateAgentStatus("Critic Reviewer", "error");
 
-    const body = updateCommentMock.mock.calls[0][0].body;
+    const body = updateCommentMock.mock.calls[0]![0].body;
     expect(body).toContain("❌");
     expect(body).toContain("Error");
   });

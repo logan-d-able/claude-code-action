@@ -73,12 +73,12 @@ synthesis:
       expect(result).not.toBeNull();
       expect(result!.version).toBe(1);
       expect(result!.agents).toHaveLength(2);
-      expect(result!.agents[0].id).toBe("security");
-      expect(result!.agents[0].name).toBe("Security Reviewer");
-      expect(result!.agents[0].perspective).toBe("Focus on security issues");
-      expect(result!.agents[0].maxTurns).toBe(8);
-      expect(result!.agents[1].id).toBe("perf");
-      expect(result!.agents[1].maxTurns).toBe(10); // default
+      expect(result!.agents[0]!.id).toBe("security");
+      expect(result!.agents[0]!.name).toBe("Security Reviewer");
+      expect(result!.agents[0]!.perspective).toBe("Focus on security issues");
+      expect(result!.agents[0]!.maxTurns).toBe(8);
+      expect(result!.agents[1]!.id).toBe("perf");
+      expect(result!.agents[1]!.maxTurns).toBe(10); // default
       expect(result!.debate_rounds).toBe(2);
       expect(result!.synthesis?.perspective).toBe(
         "Custom synthesis perspective",
@@ -100,7 +100,7 @@ agents:
       );
 
       const result = await loadAgentSpec(specPath);
-      expect(result!.agents[0].model).toBe("claude-sonnet-4-20250514");
+      expect(result!.agents[0]!.model).toBe("claude-sonnet-4-20250514");
     });
 
     it("should use id as name when name not provided", async () => {
@@ -116,7 +116,7 @@ agents:
       );
 
       const result = await loadAgentSpec(specPath);
-      expect(result!.agents[0].name).toBe("my-reviewer");
+      expect(result!.agents[0]!.name).toBe("my-reviewer");
     });
 
     it("should return null for invalid YAML", async () => {
@@ -215,7 +215,7 @@ debate_rounds: 3
       });
 
       expect(result.agents).toHaveLength(1);
-      expect(result.agents[0].id).toBe("custom");
+      expect(result.agents[0]!.id).toBe("custom");
       expect(result.debateRounds).toBe(3); // from spec file
     });
 
@@ -231,7 +231,7 @@ debate_rounds: 3
       });
 
       expect(result.agents).toHaveLength(1);
-      expect(result.agents[0].id).toBe("json-agent");
+      expect(result.agents[0]!.id).toBe("json-agent");
       expect(result.debateRounds).toBe(2); // from input, not spec
     });
 
@@ -266,7 +266,7 @@ agents:
         reviewMaxAgents: 5,
       });
 
-      expect(result.agents[0].id).toBe("from-file");
+      expect(result.agents[0]!.id).toBe("from-file");
     });
   });
 });

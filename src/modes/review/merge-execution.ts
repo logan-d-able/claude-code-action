@@ -1,3 +1,4 @@
+import * as core from "@actions/core";
 import { readFile, writeFile } from "fs/promises";
 import { existsSync } from "fs";
 
@@ -15,7 +16,7 @@ export async function mergeExecutionFiles(
       const messages = JSON.parse(content) as unknown[];
       allMessages.push(...messages);
     } catch (error) {
-      console.error(`Failed to read execution file ${filePath}: ${error}`);
+      core.warning(`Failed to read execution file ${filePath}: ${error}`);
     }
   }
 

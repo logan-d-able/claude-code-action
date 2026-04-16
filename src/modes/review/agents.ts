@@ -72,16 +72,33 @@ const DEFAULT_SYNTHESIS_PERSPECTIVE = [
   "- Provide an overall assessment of the PR's readiness",
 ].join("\n");
 
+const AGENT_ID_PATTERN = /^[a-zA-Z0-9_-]+$/;
+const MAX_TURNS_LIMIT = 50;
+const MAX_DEBATE_ROUNDS = 3;
+
+function safePositiveInt(value: unknown, fallback: number): number {
+  const num = Number(value);
+  return Number.isFinite(num) && num > 0 ? Math.floor(num) : fallback;
+}
+
 function normalizeAgent(raw: Record<string, unknown>): ReviewAgent {
   const id = String(raw.id || "");
   if (!id) {
     throw new Error("Review agent spec: each agent must have an 'id' field");
   }
+  if (!AGENT_ID_PATTERN.test(id)) {
+    throw new Error(
+      `Review agent spec: agent id '${id}' must match ${AGENT_ID_PATTERN}`,
+    );
+  }
   return {
     id,
     name: String(raw.name || id),
     perspective: String(raw.perspective || ""),
-    maxTurns: Number(raw.max_turns || raw.maxTurns || 10),
+    maxTurns: Math.min(
+      safePositiveInt(raw.max_turns || raw.maxTurns, 10),
+      MAX_TURNS_LIMIT,
+    ),
     model: raw.model ? String(raw.model) : undefined,
   };
 }
@@ -114,7 +131,10 @@ export async function loadAgentSpec(
       agents,
       debate_rounds:
         parsed.debate_rounds !== undefined
-          ? Number(parsed.debate_rounds)
+          ? Math.min(
+              safePositiveInt(parsed.debate_rounds, 1),
+              MAX_DEBATE_ROUNDS,
+            )
           : undefined,
       synthesis: synthesis?.perspective ? synthesis : undefined,
     };

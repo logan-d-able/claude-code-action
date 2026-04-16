@@ -1,3 +1,4 @@
+import * as core from "@actions/core";
 import type { Octokit } from "@octokit/rest";
 import type { ReviewAgent } from "./agents";
 import type { AgentFindings } from "./schemas";
@@ -126,7 +127,7 @@ export class ReviewTracker {
         body,
       });
     } catch (error) {
-      console.error("Failed to update tracking comment:", error);
+      core.warning(`Failed to update tracking comment: ${error}`);
     }
   }
 }
