@@ -187,6 +187,9 @@ outputs:
   session_id:
     description: "The Claude Code session ID that can be used with --resume to continue this conversation"
     value: ${{ steps.run.outputs.session_id }}
+  conclusion:
+    description: "Execution status of Claude Code ('success' or 'failure')"
+    value: ${{ steps.run.outputs.conclusion }}
 
 runs:
   using: "composite"
