@@ -1,6 +1,6 @@
 import * as core from "@actions/core";
 import { writeFile, mkdir } from "fs/promises";
-import { execSync } from "child_process";
+import { execFileSync } from "child_process";
 import { runClaude } from "../../../base-action/src/run-claude";
 
 const PROMPT_DIR = `${process.env.RUNNER_TEMP || "/tmp"}/claude-prompts`;
@@ -29,15 +29,40 @@ type TriageDecision = {
 
 function getDiffStats(baseBranch: string): string {
   try {
-    const stats = execSync(
-      `git diff --stat "${baseBranch}"...HEAD 2>/dev/null || git diff --stat HEAD~1 2>/dev/null || echo "Unable to get diff stats"`,
-      { encoding: "utf-8", maxBuffer: 1024 * 1024 },
-    ).trim();
+    let stats: string;
+    try {
+      stats = execFileSync("git", ["diff", "--stat", `${baseBranch}...HEAD`], {
+        encoding: "utf-8",
+        maxBuffer: 1024 * 1024,
+      }).trim();
+    } catch {
+      try {
+        stats = execFileSync("git", ["diff", "--stat", "HEAD~1"], {
+          encoding: "utf-8",
+          maxBuffer: 1024 * 1024,
+        }).trim();
+      } catch {
+        return "Unable to get diff stats";
+      }
+    }
 
-    const shortlog = execSync(
-      `git diff --shortstat "${baseBranch}"...HEAD 2>/dev/null || git diff --shortstat HEAD~1 2>/dev/null || echo ""`,
-      { encoding: "utf-8", maxBuffer: 1024 * 1024 },
-    ).trim();
+    let shortlog = "";
+    try {
+      shortlog = execFileSync(
+        "git",
+        ["diff", "--shortstat", `${baseBranch}...HEAD`],
+        { encoding: "utf-8", maxBuffer: 1024 * 1024 },
+      ).trim();
+    } catch {
+      try {
+        shortlog = execFileSync("git", ["diff", "--shortstat", "HEAD~1"], {
+          encoding: "utf-8",
+          maxBuffer: 1024 * 1024,
+        }).trim();
+      } catch {
+        // shortlog stays empty
+      }
+    }
 
     return `${stats}\n\nSummary: ${shortlog}`;
   } catch {

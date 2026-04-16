@@ -340,5 +340,110 @@ describe("detectMode with enhanced routing", () => {
 
       expect(detectMode(context)).toBe("review");
     });
+
+    it("should not detect review mode for issue_comment on PR even with 'true'", () => {
+      const context: GitHubContext = {
+        ...baseContext,
+        eventName: "issue_comment",
+        eventAction: "created",
+        payload: {
+          issue: { number: 1, body: "Test" },
+          comment: { body: "@claude help" },
+        } as any,
+        entityNumber: 1,
+        isPR: true,
+        inputs: { ...baseContext.inputs, multiAgentReview: "true" },
+      };
+
+      expect(detectMode(context)).not.toBe("review");
+    });
+
+    it("should not detect review mode for pull_request_review_comment even with 'true'", () => {
+      const context: GitHubContext = {
+        ...baseContext,
+        eventName: "pull_request_review_comment",
+        eventAction: "created",
+        payload: {
+          pull_request: { number: 1, body: "Test" },
+          comment: { body: "@claude check this" },
+        } as any,
+        entityNumber: 1,
+        isPR: true,
+        inputs: { ...baseContext.inputs, multiAgentReview: "true" },
+      };
+
+      expect(detectMode(context)).not.toBe("review");
+    });
+
+    it("should use agent mode when 'auto' with explicit prompt", () => {
+      const context: GitHubContext = {
+        ...baseContext,
+        eventName: "pull_request",
+        eventAction: "opened",
+        payload: { pull_request: { number: 1 } } as any,
+        entityNumber: 1,
+        isPR: true,
+        inputs: {
+          ...baseContext.inputs,
+          multiAgentReview: "auto",
+          prompt: "Review for security issues",
+        },
+      };
+
+      expect(detectMode(context)).toBe("agent");
+    });
+
+    it("should use tag mode when 'auto' with trackProgress", () => {
+      const context: GitHubContext = {
+        ...baseContext,
+        eventName: "pull_request",
+        eventAction: "opened",
+        payload: { pull_request: { number: 1 } } as any,
+        entityNumber: 1,
+        isPR: true,
+        inputs: {
+          ...baseContext.inputs,
+          multiAgentReview: "auto",
+          trackProgress: true,
+        },
+      };
+
+      expect(detectMode(context)).toBe("tag");
+    });
+
+    it("should not detect review mode for issue_comment on PR with 'auto'", () => {
+      const context: GitHubContext = {
+        ...baseContext,
+        eventName: "issue_comment",
+        eventAction: "created",
+        payload: {
+          issue: { number: 1, body: "Test" },
+          comment: { body: "@claude help" },
+        } as any,
+        entityNumber: 1,
+        isPR: true,
+        inputs: { ...baseContext.inputs, multiAgentReview: "auto" },
+      };
+
+      expect(detectMode(context)).not.toBe("review");
+    });
+
+    it("should use review mode when 'true' even with prompt", () => {
+      const context: GitHubContext = {
+        ...baseContext,
+        eventName: "pull_request",
+        eventAction: "opened",
+        payload: { pull_request: { number: 1 } } as any,
+        entityNumber: 1,
+        isPR: true,
+        inputs: {
+          ...baseContext.inputs,
+          multiAgentReview: "true",
+          prompt: "Review for security issues",
+        },
+      };
+
+      expect(detectMode(context)).toBe("review");
+    });
   });
 });

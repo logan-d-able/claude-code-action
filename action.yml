@@ -151,9 +151,9 @@ inputs:
     required: false
     default: ""
   multi_agent_review:
-    description: "Multi-agent peer review mode. 'auto' (default): triage agent analyzes diff complexity and routes to multi-agent or single-agent review. 'true': always use multi-agent. 'false': disable review mode entirely."
+    description: "Multi-agent peer review mode. 'false' (default): disabled. 'auto': triage agent analyzes diff complexity and routes to multi-agent or single-agent review. 'true': always use multi-agent review."
     required: false
-    default: "auto"
+    default: "false"
   review_agents:
     description: "JSON array defining custom review agents. Each agent needs id, name, perspective, and optional max_turns. Overrides .claude/review-agents.yml if present."
     required: false
