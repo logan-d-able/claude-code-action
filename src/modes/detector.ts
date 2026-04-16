@@ -12,9 +12,9 @@ import { checkContainsTrigger } from "../github/validation/trigger";
 export type AutoDetectedMode = "tag" | "agent" | "review";
 
 export function detectMode(context: GitHubContext): AutoDetectedMode {
-  // Multi-agent review mode: PR context + multiAgentReview flag
+  // Review mode: PR context + multiAgentReview is "true" or "auto"
   if (
-    context.inputs.multiAgentReview &&
+    context.inputs.multiAgentReview !== "false" &&
     isEntityContext(context) &&
     context.isPR
   ) {

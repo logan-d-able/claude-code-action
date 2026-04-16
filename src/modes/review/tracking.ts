@@ -9,6 +9,10 @@ type TrackingState = {
   agents: Map<string, { status: AgentStatus; findingsCount?: string }>;
   debateStatus: AgentStatus;
   synthesisStatus: AgentStatus;
+  reviewMode?: {
+    mode: "multi-agent" | "single-agent";
+    reasoning: string;
+  };
 };
 
 const STATUS_ICONS: Record<AgentStatus, string> = {
@@ -19,6 +23,21 @@ const STATUS_ICONS: Record<AgentStatus, string> = {
 };
 
 function renderTrackingTable(state: TrackingState): string {
+  const modeHeader = state.reviewMode
+    ? `> **Mode:** ${state.reviewMode.mode === "multi-agent" ? "🔀 Multi-Agent" : "🔹 Single-Agent"} — ${state.reviewMode.reasoning}\n\n`
+    : "";
+
+  if (state.reviewMode?.mode === "single-agent") {
+    const synthesisIcon = STATUS_ICONS[state.synthesisStatus];
+    return `## 🔍 PR Review
+
+${modeHeader}| Step | Status |
+|------|--------|
+| Review | ${synthesisIcon} ${state.synthesisStatus.charAt(0).toUpperCase() + state.synthesisStatus.slice(1)} |
+
+*Powered by Claude Code Action*`;
+  }
+
   const agentRows = Array.from(state.agents.entries())
     .map(([name, { status, findingsCount }]) => {
       const icon = STATUS_ICONS[status];
@@ -32,7 +51,7 @@ function renderTrackingTable(state: TrackingState): string {
 
   return `## 🔍 Multi-Agent Peer Review
 
-| Persona | Status | Findings |
+${modeHeader}| Persona | Status | Findings |
 |---------|--------|----------|
 ${agentRows}
 | Debate Round | ${debateIcon} ${state.debateStatus.charAt(0).toUpperCase() + state.debateStatus.slice(1)} | - |
@@ -76,6 +95,14 @@ export class ReviewTracker {
     });
     this.commentId = response.data.id;
     return this.commentId;
+  }
+
+  async setReviewMode(
+    mode: "multi-agent" | "single-agent",
+    reasoning: string,
+  ): Promise<void> {
+    this.state.reviewMode = { mode, reasoning };
+    await this.updateComment();
   }
 
   async updateAgentStatus(

@@ -102,7 +102,7 @@ type BaseContext = {
     includeFixLinks: boolean;
     includeCommentsByActor: string;
     excludeCommentsByActor: string;
-    multiAgentReview: boolean;
+    multiAgentReview: string;
     reviewAgents?: string;
     reviewDebateRounds: number;
     reviewMaxAgents: number;
@@ -169,7 +169,7 @@ export function parseGitHubContext(): GitHubContext {
       includeFixLinks: process.env.INCLUDE_FIX_LINKS === "true",
       includeCommentsByActor: process.env.INCLUDE_COMMENTS_BY_ACTOR ?? "",
       excludeCommentsByActor: process.env.EXCLUDE_COMMENTS_BY_ACTOR ?? "",
-      multiAgentReview: process.env.MULTI_AGENT_REVIEW === "true",
+      multiAgentReview: process.env.MULTI_AGENT_REVIEW || "false",
       reviewAgents: process.env.REVIEW_AGENTS || undefined,
       reviewDebateRounds: Math.max(
         0,

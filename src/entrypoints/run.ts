@@ -249,6 +249,7 @@ async function run() {
         context,
         octokit,
         githubToken,
+        multiAgentReview: context.inputs.multiAgentReview,
       });
 
       commentId = reviewResult.commentId;

@@ -169,6 +169,51 @@ comments for specific line-level feedback.`;
   return promptPath;
 }
 
+export async function generateSingleAgentPrompt(
+  githubContextMarkdown: string,
+): Promise<string> {
+  await mkdir(PROMPT_DIR, { recursive: true });
+
+  const prompt = `You are a comprehensive code reviewer. Analyze this Pull Request thoroughly from all perspectives: correctness, code quality, security, performance, and conventions.
+
+${githubContextMarkdown}
+
+## Instructions
+
+1. Read the PR diff and changed files carefully
+2. Analyze the changes from multiple perspectives:
+   - **Correctness**: Logic bugs, edge cases, error handling
+   - **Code Quality**: SOLID principles, DRY, readability, maintainability
+   - **Security**: Injection vulnerabilities, auth issues, data exposure
+   - **Performance**: Inefficiencies, unnecessary allocations, N+1 queries
+   - **Conventions**: Naming, style, project patterns consistency
+3. Write a well-structured markdown review comment
+
+Format your review as:
+1. An executive summary (1-2 sentences)
+2. Critical issues that must be addressed (if any)
+3. Warnings and suggestions grouped by theme
+4. A final verdict: whether the PR is ready to merge, needs changes, or needs discussion
+
+## Inline Comments
+
+For specific code-level findings (critical issues, warnings, and important suggestions),
+use the mcp__github_inline_comment__create_inline_comment tool to post line-by-line review
+comments directly on the PR diff.
+
+For each inline comment:
+- Target the specific file and line number
+- Keep the comment concise and actionable
+- Include the severity level and a clear explanation
+
+Post the overall summary via mcp__github_comment__update_claude_comment, and use inline
+comments for specific line-level feedback.`;
+
+  const promptPath = `${PROMPT_DIR}/review-single-agent.txt`;
+  await writeFile(promptPath, prompt);
+  return promptPath;
+}
+
 export function buildAgentClaudeArgs(
   baseClaudeArgs: string,
   schema: typeof AGENT_FINDINGS_SCHEMA | typeof AGENT_REBUTTAL_SCHEMA,

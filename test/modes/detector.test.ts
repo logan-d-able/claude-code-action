@@ -30,7 +30,7 @@ describe("detectMode with enhanced routing", () => {
       includeFixLinks: true,
       includeCommentsByActor: "",
       excludeCommentsByActor: "",
-      multiAgentReview: false,
+      multiAgentReview: "false",
       reviewDebateRounds: 1,
       reviewMaxAgents: 5,
     },
@@ -266,7 +266,7 @@ describe("detectMode with enhanced routing", () => {
   });
 
   describe("Review Mode", () => {
-    it("should detect review mode when multiAgentReview is true on a PR", () => {
+    it("should detect review mode when multiAgentReview is 'true' on a PR", () => {
       const context: GitHubContext = {
         ...baseContext,
         eventName: "pull_request",
@@ -274,13 +274,27 @@ describe("detectMode with enhanced routing", () => {
         payload: { pull_request: { number: 1 } } as any,
         entityNumber: 1,
         isPR: true,
-        inputs: { ...baseContext.inputs, multiAgentReview: true },
+        inputs: { ...baseContext.inputs, multiAgentReview: "true" },
       };
 
       expect(detectMode(context)).toBe("review");
     });
 
-    it("should not detect review mode on issues even with multiAgentReview true", () => {
+    it("should detect review mode when multiAgentReview is 'auto' on a PR", () => {
+      const context: GitHubContext = {
+        ...baseContext,
+        eventName: "pull_request",
+        eventAction: "opened",
+        payload: { pull_request: { number: 1 } } as any,
+        entityNumber: 1,
+        isPR: true,
+        inputs: { ...baseContext.inputs, multiAgentReview: "auto" },
+      };
+
+      expect(detectMode(context)).toBe("review");
+    });
+
+    it("should not detect review mode on issues even with multiAgentReview 'true'", () => {
       const context: GitHubContext = {
         ...baseContext,
         eventName: "issues",
@@ -288,14 +302,14 @@ describe("detectMode with enhanced routing", () => {
         payload: { issue: { number: 1, body: "Test" } } as any,
         entityNumber: 1,
         isPR: false,
-        inputs: { ...baseContext.inputs, multiAgentReview: true },
+        inputs: { ...baseContext.inputs, multiAgentReview: "true" },
       };
 
       // Not a PR, so should not be review mode
       expect(detectMode(context)).not.toBe("review");
     });
 
-    it("should not detect review mode when multiAgentReview is false", () => {
+    it("should not detect review mode when multiAgentReview is 'false'", () => {
       const context: GitHubContext = {
         ...baseContext,
         eventName: "pull_request",
@@ -303,7 +317,7 @@ describe("detectMode with enhanced routing", () => {
         payload: { pull_request: { number: 1 } } as any,
         entityNumber: 1,
         isPR: true,
-        inputs: { ...baseContext.inputs, multiAgentReview: false },
+        inputs: { ...baseContext.inputs, multiAgentReview: "false" },
       };
 
       expect(detectMode(context)).not.toBe("review");
@@ -319,7 +333,7 @@ describe("detectMode with enhanced routing", () => {
         isPR: true,
         inputs: {
           ...baseContext.inputs,
-          multiAgentReview: true,
+          multiAgentReview: "true",
           trackProgress: true,
         },
       };

@@ -7,7 +7,7 @@ import {
   configureGitAuth,
   setupSshSigning,
 } from "../../github/operations/git-config";
-import { setupBranch } from "../../github/operations/branch";
+import { setupBranch, type BranchInfo } from "../../github/operations/branch";
 import {
   fetchGitHubData,
   extractTriggerTimestamp,
@@ -25,18 +25,16 @@ import {
   generateAgentPrompt,
   generateDebatePrompt,
   generateSynthesisPrompt,
+  generateSingleAgentPrompt,
   buildAgentClaudeArgs,
 } from "./prompts";
 import { ReviewTracker } from "./tracking";
 import { mergeExecutionFiles } from "./merge-execution";
+import { runTriage } from "./triage";
 
 type ReviewResult = {
   commentId: number | undefined;
-  branchInfo: {
-    baseBranch: string;
-    currentBranch: string;
-    claudeBranch: string | undefined;
-  };
+  branchInfo: BranchInfo;
   executionFile?: string;
   claudeSuccess: boolean;
 };
@@ -45,10 +43,12 @@ export async function prepareAndRunReview({
   context,
   octokit,
   githubToken,
+  multiAgentReview,
 }: {
   context: GitHubContext;
   octokit: Octokits;
   githubToken: string;
+  multiAgentReview: string;
 }): Promise<ReviewResult> {
   if (!isEntityContext(context)) {
     throw new Error("Review mode requires entity context (PR)");
@@ -146,6 +146,34 @@ export async function prepareAndRunReview({
     mode: "review",
     context,
   });
+
+  // === Triage (for "auto" mode) ===
+  let useMultiAgent = multiAgentReview === "true";
+  let triageReasoning =
+    multiAgentReview === "true" ? "forced by configuration" : "";
+
+  if (multiAgentReview === "auto") {
+    const triageDecision = await runTriage(branchInfo.baseBranch, mcpConfig);
+    useMultiAgent = triageDecision.useMultiAgent;
+    triageReasoning = triageDecision.reasoning;
+  }
+
+  if (!useMultiAgent) {
+    core.info("Using single-agent review mode");
+    await tracker.setReviewMode("single-agent", triageReasoning);
+    return runSingleAgentReview({
+      githubContextMarkdown,
+      githubToken,
+      context,
+      branchInfo,
+      trackingCommentId,
+      synthesisCommentId,
+      tracker,
+    });
+  }
+
+  core.info("Using multi-agent review mode");
+  await tracker.setReviewMode("multi-agent", triageReasoning);
 
   const baseClaudeArgs = buildBaseClaudeArgs(mcpConfig);
   const executionFiles: string[] = [];
@@ -277,13 +305,79 @@ export async function prepareAndRunReview({
 
   return {
     commentId: trackingCommentId,
-    branchInfo: {
-      baseBranch: branchInfo.baseBranch,
-      currentBranch: branchInfo.currentBranch,
-      claudeBranch: branchInfo.claudeBranch,
-    },
+    branchInfo,
     executionFile: mergedExecutionFile,
     claudeSuccess: allFindings.length > 0 && synthesisSuccess,
+  };
+}
+
+async function runSingleAgentReview({
+  githubContextMarkdown,
+  githubToken,
+  context,
+  branchInfo,
+  trackingCommentId,
+  synthesisCommentId,
+  tracker,
+}: {
+  githubContextMarkdown: string;
+  githubToken: string;
+  context: ParsedGitHubContext;
+  branchInfo: BranchInfo;
+  trackingCommentId: number;
+  synthesisCommentId: number;
+  tracker: ReviewTracker;
+}): Promise<ReviewResult> {
+  const executionFilePath = `${process.env.RUNNER_TEMP}/claude-execution-review-single.json`;
+
+  // Single agent gets both comment and inline comment tools
+  const singleAgentMcpConfig = await prepareMcpConfig({
+    githubToken,
+    owner: context.repository.owner,
+    repo: context.repository.repo,
+    branch: branchInfo.claudeBranch || branchInfo.currentBranch,
+    baseBranch: branchInfo.baseBranch,
+    claudeCommentId: synthesisCommentId.toString(),
+    allowedTools: [
+      "mcp__github_comment__update_claude_comment",
+      "mcp__github_inline_comment__create_inline_comment",
+    ],
+    mode: "review",
+    context,
+  });
+
+  const escapedConfig = singleAgentMcpConfig.replace(/'/g, "'\\''");
+  const claudeArgs = `--mcp-config '${escapedConfig}' --permission-mode acceptEdits --allowedTools "Glob,Grep,Read,LS,mcp__github_comment__update_claude_comment,mcp__github_inline_comment__create_inline_comment"`;
+
+  const promptPath = await generateSingleAgentPrompt(githubContextMarkdown);
+
+  await tracker.updateSynthesisStatus("running");
+
+  let success = false;
+  try {
+    await runClaude(promptPath, {
+      claudeArgs,
+      appendSystemPrompt:
+        "You are a thorough code reviewer. Provide a comprehensive review covering correctness, code quality, security, performance, and conventions.",
+      showFullOutput: process.env.INPUT_SHOW_FULL_OUTPUT,
+      executionFilePath,
+    });
+    success = true;
+    await tracker.updateSynthesisStatus("complete");
+  } catch (error) {
+    core.warning(`Single-agent review failed: ${error}`);
+    await tracker.updateSynthesisStatus("error");
+  }
+
+  // Merge execution file
+  const mergedExecutionFile = `${process.env.RUNNER_TEMP}/claude-execution-output.json`;
+  await mergeExecutionFiles([executionFilePath], mergedExecutionFile);
+
+  return {
+    commentId: trackingCommentId,
+    branchInfo,
+    executionFile: mergedExecutionFile,
+    claudeSuccess: success,
   };
 }
 

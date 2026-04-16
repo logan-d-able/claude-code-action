@@ -25,7 +25,7 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          multi_agent_review: "true"
+          multi_agent_review: "auto"
           review_debate_rounds: "1"
           review_max_agents: "3"
 
