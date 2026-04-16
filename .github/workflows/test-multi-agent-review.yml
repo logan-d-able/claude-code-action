@@ -1,0 +1,55 @@
+name: Test Multi-Agent Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+  workflow_dispatch:
+
+jobs:
+  test-review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Multi-Agent Peer Review
+        id: review
+        uses: ./
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          multi_agent_review: "true"
+          review_debate_rounds: "1"
+          review_max_agents: "3"
+
+      - name: Verify review output
+        run: |
+          CONCLUSION="${{ steps.review.outputs.conclusion }}"
+          EXECUTION_FILE="${{ steps.review.outputs.execution_file }}"
+
+          echo "Conclusion: $CONCLUSION"
+          echo "Execution file: $EXECUTION_FILE"
+
+          if [ "$CONCLUSION" = "success" ]; then
+            echo "✅ Multi-agent review completed successfully"
+          else
+            echo "❌ Multi-agent review failed"
+            exit 1
+          fi
+
+          if [ -f "$EXECUTION_FILE" ]; then
+            if jq . "$EXECUTION_FILE" > /dev/null 2>&1; then
+              echo "✅ Execution file is valid JSON"
+            else
+              echo "❌ Execution file is not valid JSON"
+              exit 1
+            fi
+          else
+            echo "⚠️ Execution file not found (may be expected in some cases)"
+          fi
