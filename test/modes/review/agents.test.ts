@@ -30,9 +30,9 @@ describe("review agents", () => {
       expect(ids).toEqual(["critic", "code-quality", "convention"]);
     });
 
-    it("should set maxTurns to 10 for all default agents", () => {
+    it("should not set maxTurns for default agents (unlimited)", () => {
       for (const agent of DEFAULT_AGENTS) {
-        expect(agent.maxTurns).toBe(10);
+        expect(agent.maxTurns).toBeUndefined();
       }
     });
 
@@ -78,7 +78,7 @@ synthesis:
       expect(result!.agents[0]!.perspective).toBe("Focus on security issues");
       expect(result!.agents[0]!.maxTurns).toBe(8);
       expect(result!.agents[1]!.id).toBe("perf");
-      expect(result!.agents[1]!.maxTurns).toBe(10); // default
+      expect(result!.agents[1]!.maxTurns).toBeUndefined(); // no max_turns in spec = unlimited
       expect(result!.debate_rounds).toBe(2);
       expect(result!.synthesis?.perspective).toBe(
         "Custom synthesis perspective",

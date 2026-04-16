@@ -7,7 +7,7 @@ export type ReviewAgent = {
   id: string;
   name: string;
   perspective: string;
-  maxTurns: number;
+  maxTurns?: number;
   model?: string;
 };
 
@@ -32,7 +32,7 @@ export const DEFAULT_AGENTS: ReviewAgent[] = [
       "- Whether the changes could introduce regressions",
       "- Architectural fit with the project's design patterns",
     ].join("\n"),
-    maxTurns: 10,
+    maxTurns: undefined,
   },
   {
     id: "code-quality",
@@ -45,7 +45,7 @@ export const DEFAULT_AGENTS: ReviewAgent[] = [
       "- Unnecessary complexity or over-engineering",
       "- Resource management and potential leaks",
     ].join("\n"),
-    maxTurns: 10,
+    maxTurns: undefined,
   },
   {
     id: "convention",
@@ -58,7 +58,7 @@ export const DEFAULT_AGENTS: ReviewAgent[] = [
       "- Documentation and comment quality where present",
       "- API surface consistency",
     ].join("\n"),
-    maxTurns: 10,
+    maxTurns: undefined,
   },
 ];
 
@@ -95,10 +95,13 @@ function normalizeAgent(raw: Record<string, unknown>): ReviewAgent {
     id,
     name: String(raw.name || id),
     perspective: String(raw.perspective || ""),
-    maxTurns: Math.min(
-      safePositiveInt(raw.max_turns || raw.maxTurns, 10),
-      MAX_TURNS_LIMIT,
-    ),
+    maxTurns:
+      raw.max_turns || raw.maxTurns
+        ? Math.min(
+            safePositiveInt(raw.max_turns || raw.maxTurns, 10),
+            MAX_TURNS_LIMIT,
+          )
+        : undefined,
     model: raw.model ? String(raw.model) : undefined,
   };
 }

@@ -320,7 +320,7 @@ async function runReviewAgent(
     claudeArgs,
     appendSystemPrompt: agent.perspective,
     model: agent.model,
-    maxTurns: String(agent.maxTurns),
+    maxTurns: agent.maxTurns ? String(agent.maxTurns) : undefined,
     showFullOutput: process.env.INPUT_SHOW_FULL_OUTPUT,
     executionFilePath,
   });
@@ -360,7 +360,7 @@ async function runDebateAgent(
     claudeArgs,
     appendSystemPrompt: agent.perspective,
     model: agent.model,
-    maxTurns: String(agent.maxTurns),
+    maxTurns: agent.maxTurns ? String(agent.maxTurns) : undefined,
     showFullOutput: process.env.INPUT_SHOW_FULL_OUTPUT,
     executionFilePath,
   });
@@ -401,13 +401,16 @@ async function runSynthesisAgent(
     branch: "",
     baseBranch: "",
     claudeCommentId: synthesisCommentId.toString(),
-    allowedTools: ["mcp__github_comment__update_claude_comment"],
+    allowedTools: [
+      "mcp__github_comment__update_claude_comment",
+      "mcp__github_inline_comment__create_inline_comment",
+    ],
     mode: "review",
     context,
   });
 
   const escapedConfig = synthesisMcpConfig.replace(/'/g, "'\\''");
-  const claudeArgs = `--mcp-config '${escapedConfig}' --permission-mode acceptEdits --allowedTools "Glob,Grep,Read,mcp__github_comment__update_claude_comment"`;
+  const claudeArgs = `--mcp-config '${escapedConfig}' --permission-mode acceptEdits --allowedTools "Glob,Grep,Read,mcp__github_comment__update_claude_comment,mcp__github_inline_comment__create_inline_comment"`;
 
   core.info("Running synthesis agent");
 
