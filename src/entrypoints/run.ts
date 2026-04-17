@@ -15,14 +15,7 @@ import { setupGitHubToken, WorkflowValidationSkipError } from "../github/token";
 import { checkWritePermissions } from "../github/validation/permissions";
 import { createOctokit } from "../github/api/client";
 import type { Octokits } from "../github/api/client";
-import {
-  parseGitHubContext,
-  isEntityContext,
-  isPullRequestEvent,
-  isPullRequestReviewEvent,
-  isPullRequestReviewCommentEvent,
-  isIssueCommentEvent,
-} from "../github/context";
+import { parseGitHubContext, isEntityContext } from "../github/context";
 import type { GitHubContext } from "../github/context";
 import { detectMode } from "../modes/detector";
 import { prepareTagMode } from "../modes/tag";
@@ -30,7 +23,7 @@ import { prepareAgentMode } from "../modes/agent";
 import { prepareAndRunReview } from "../modes/review";
 import { checkContainsTrigger } from "../github/validation/trigger";
 import { restoreConfigFromBase } from "../github/operations/restore-config";
-import { validateBranchName } from "../github/operations/branch";
+import { resolveRestoreBase } from "../github/operations/resolve-base";
 import { collectActionInputsPresence } from "./collect-inputs";
 import { updateCommentLink } from "./update-comment-link";
 import { formatTurnsFromData } from "./format-turns";
@@ -221,30 +214,9 @@ async function run() {
 
     // On PRs, .claude/ and .mcp.json in the checkout are attacker-controlled.
     // Restore them from the base branch before the CLI reads them.
-    if (isEntityContext(context) && context.isPR) {
-      let restoreBase: string | undefined;
-      if (
-        isPullRequestEvent(context) ||
-        isPullRequestReviewEvent(context) ||
-        isPullRequestReviewCommentEvent(context)
-      ) {
-        restoreBase = context.payload.pull_request.base.ref;
-      } else if (
-        isIssueCommentEvent(context) &&
-        context.payload.issue.pull_request
-      ) {
-        // issue_comment on a PR — payload lacks base.ref, so look it up.
-        const { data: pr } = await octokit.rest.pulls.get({
-          owner: context.repository.owner,
-          repo: context.repository.repo,
-          pull_number: context.entityNumber,
-        });
-        restoreBase = pr.base.ref;
-      }
-      if (restoreBase) {
-        validateBranchName(restoreBase);
-        restoreConfigFromBase(restoreBase);
-      }
+    const restoreBase = await resolveRestoreBase(context, octokit);
+    if (restoreBase) {
+      restoreConfigFromBase(restoreBase);
     }
 
     await setupClaudeCodeSettings(process.env.INPUT_SETTINGS);
