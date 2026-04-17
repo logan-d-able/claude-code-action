@@ -163,6 +163,101 @@ describe("buildSubAgentSystemPrompt", () => {
       }),
     ).not.toThrow();
   });
+
+  it("sanitizes findings before embedding them in synthesis prompt", () => {
+    const prompt = buildSubAgentSystemPrompt({
+      role: "synthesis",
+      githubContextMarkdown: "ctx",
+      allFindings: [
+        {
+          agent_id: "a1",
+          agent_name: "A1",
+          summary: "summary <!-- injected -->",
+          findings: [
+            {
+              severity: "major",
+              title: "T\u200Binjection",
+              description: "D ![alt](x) end",
+              file: "<!--f-->",
+              line: 1,
+            },
+          ],
+        },
+      ],
+    });
+    expect(prompt).not.toContain("<!-- injected -->");
+    expect(prompt).not.toContain("\u200B");
+    expect(prompt).not.toContain("![alt](x)");
+    expect(prompt).toContain("![](x)");
+    expect(prompt).not.toContain("<!--f-->");
+  });
+
+  it("sanitizes rebuttals before embedding them in synthesis prompt", () => {
+    const prompt = buildSubAgentSystemPrompt({
+      role: "synthesis",
+      githubContextMarkdown: "ctx",
+      allRebuttals: [
+        {
+          agent_id: "a1",
+          agent_name: "A1",
+          responses: [
+            {
+              regarding_finding_title: "T <!--x-->",
+              stance: "agree",
+              reasoning: "R \u2066bidi",
+            },
+          ],
+        },
+      ],
+    });
+    expect(prompt).not.toContain("<!--x-->");
+    expect(prompt).not.toContain("\u2066");
+  });
+
+  it("sanitizes ownFindings JSON block in debate prompt", () => {
+    const prompt = buildSubAgentSystemPrompt({
+      role: "debate",
+      agent: { id: "x", name: "X", perspective: "p", tools: ["Read"] },
+      githubContextMarkdown: "ctx",
+      debateRoundNumber: 1,
+      ownFindings: {
+        agent_id: "x",
+        agent_name: "X",
+        summary: "s <!-- evil -->",
+        findings: [],
+      },
+      otherFindings: [],
+    });
+    expect(prompt).not.toContain("<!-- evil -->");
+    expect(prompt).toContain("```json");
+  });
+
+  it("leaves benign text untouched in synthesis prompt", () => {
+    const prompt = buildSubAgentSystemPrompt({
+      role: "synthesis",
+      githubContextMarkdown: "ctx",
+      allFindings: [
+        {
+          agent_id: "a1",
+          agent_name: "Agent One",
+          summary: "Clean summary.",
+          findings: [
+            {
+              severity: "major",
+              title: "Null deref",
+              description: "arr[0] before length check",
+              file: "x.ts",
+              line: 10,
+            },
+          ],
+        },
+      ],
+    });
+    expect(prompt).toContain("Agent One");
+    expect(prompt).toContain("Null deref");
+    expect(prompt).toContain("arr[0] before length check");
+    expect(prompt).toContain("x.ts");
+  });
 });
 
 describe("SYNTHESIS_COMMENT_MARKER", () => {

@@ -6,6 +6,7 @@
  * passed via `appendSystemPrompt` — the helpers in this file produce that text.
  */
 
+import { sanitizeContent } from "../../github/utils/sanitizer";
 import type { ReviewAgent } from "./agents";
 import type { AgentFindings, AgentRebuttal } from "./schemas";
 
@@ -16,9 +17,41 @@ import type { AgentFindings, AgentRebuttal } from "./schemas";
  */
 export const SYNTHESIS_COMMENT_MARKER = "## Multi-agent review";
 
+function sanitizeFindings(f: AgentFindings): AgentFindings {
+  return {
+    agent_id: sanitizeContent(f.agent_id),
+    agent_name: sanitizeContent(f.agent_name),
+    summary: sanitizeContent(f.summary),
+    overall_assessment:
+      f.overall_assessment !== undefined
+        ? sanitizeContent(f.overall_assessment)
+        : undefined,
+    findings: f.findings.map((item) => ({
+      severity: item.severity,
+      title: sanitizeContent(item.title),
+      description: sanitizeContent(item.description),
+      file: item.file !== undefined ? sanitizeContent(item.file) : undefined,
+      line: item.line,
+    })),
+  };
+}
+
+function sanitizeRebuttal(r: AgentRebuttal): AgentRebuttal {
+  return {
+    agent_id: sanitizeContent(r.agent_id),
+    agent_name: sanitizeContent(r.agent_name),
+    responses: r.responses.map((x) => ({
+      regarding_finding_title: sanitizeContent(x.regarding_finding_title),
+      stance: x.stance,
+      reasoning: sanitizeContent(x.reasoning),
+    })),
+  };
+}
+
 function renderFindingsForDebate(findings: AgentFindings[]): string {
   return findings
-    .map((f) => {
+    .map((raw) => {
+      const f = sanitizeFindings(raw);
       const entries = f.findings
         .map(
           (item, idx) =>
@@ -32,7 +65,8 @@ function renderFindingsForDebate(findings: AgentFindings[]): string {
 
 function renderRebuttals(rebuttals: AgentRebuttal[]): string {
   return rebuttals
-    .map((r) => {
+    .map((raw) => {
+      const r = sanitizeRebuttal(raw);
       const entries = r.responses
         .map(
           (resp, idx) =>
@@ -119,7 +153,8 @@ function buildRoleSection(params: BuildSubAgentSystemPromptParams): string {
   }
 
   if (params.role === "debate") {
-    const own = `\n\n### Your original findings\n\n\`\`\`json\n${JSON.stringify(params.ownFindings, null, 2)}\n\`\`\``;
+    const sanitizedOwn = sanitizeFindings(params.ownFindings);
+    const own = `\n\n### Your original findings\n\n\`\`\`json\n${JSON.stringify(sanitizedOwn, null, 2)}\n\`\`\``;
     const others = params.otherFindings.length
       ? `\n\n### Other reviewers' findings\n\n${renderFindingsForDebate(params.otherFindings)}`
       : "";
