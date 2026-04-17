@@ -1,3 +1,4 @@
+import * as core from "@actions/core";
 import {
   isEntityContext,
   isIssueCommentEvent,
@@ -14,8 +15,11 @@ import { validateBranchName } from "./branch";
  * from. Returns undefined for non-PR events.
  *
  * issue_comment payloads lack pull_request.base.ref, so this falls back to
- * the REST API for that case. Validation is performed inside so callers
- * don't have to re-derive which branch to pass to validateBranchName.
+ * the REST API for that case. The API call is wrapped in try/catch: a
+ * transient failure degrades to "skip restore" (caller-safe fallback)
+ * instead of crashing the entire run. Validation happens inside so
+ * callers don't have to re-derive which branch to pass to
+ * validateBranchName.
  */
 export async function resolveRestoreBase(
   context: GitHubContext,
@@ -34,13 +38,21 @@ export async function resolveRestoreBase(
   }
 
   if (isIssueCommentEvent(context) && context.payload.issue.pull_request) {
-    const { data: pr } = await octokit.rest.pulls.get({
-      owner: context.repository.owner,
-      repo: context.repository.repo,
-      pull_number: context.entityNumber,
-    });
-    validateBranchName(pr.base.ref);
-    return pr.base.ref;
+    try {
+      const { data: pr } = await octokit.rest.pulls.get({
+        owner: context.repository.owner,
+        repo: context.repository.repo,
+        pull_number: context.entityNumber,
+      });
+      validateBranchName(pr.base.ref);
+      return pr.base.ref;
+    } catch (err) {
+      core.warning(
+        `Failed to resolve PR base ref for restore-config: ${(err as Error).message}. ` +
+          `Skipping restore-config step.`,
+      );
+      return undefined;
+    }
   }
 
   return undefined;

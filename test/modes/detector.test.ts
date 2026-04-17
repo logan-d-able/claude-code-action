@@ -499,5 +499,96 @@ describe("detectMode with enhanced routing", () => {
 
       expect(detectMode(context)).toBe("review");
     });
+
+    // Regression guards for the prompt-bypass bug: checkContainsTrigger
+    // returns true whenever `prompt` is set, which silently turned every
+    // PR comment (bots / "lgtm" / the orchestrator's own tracking comment)
+    // into a review re-trigger in prompt-configured workflows.
+    it("should NOT detect review mode for issue_comment with unrelated body even when prompt is set", () => {
+      const context: GitHubContext = {
+        ...baseContext,
+        eventName: "issue_comment",
+        eventAction: "created",
+        payload: {
+          issue: { number: 1, body: "Test" },
+          comment: { body: "lgtm", user: { type: "User" } },
+        } as any,
+        entityNumber: 1,
+        isPR: true,
+        inputs: {
+          ...baseContext.inputs,
+          multiAgentReview: "auto",
+          prompt: "Team guidance here",
+        },
+      };
+
+      expect(detectMode(context)).not.toBe("review");
+    });
+
+    it("should NOT detect review mode for issue_comment authored by a Bot even with trigger phrase", () => {
+      const context: GitHubContext = {
+        ...baseContext,
+        eventName: "issue_comment",
+        eventAction: "created",
+        payload: {
+          issue: { number: 1, body: "Test" },
+          comment: { body: "@claude review", user: { type: "Bot" } },
+        } as any,
+        entityNumber: 1,
+        isPR: true,
+        inputs: { ...baseContext.inputs, multiAgentReview: "auto" },
+      };
+
+      expect(detectMode(context)).not.toBe("review");
+    });
+
+    it("should detect review mode for issue_comment by a User with trigger phrase even when prompt is set", () => {
+      const context: GitHubContext = {
+        ...baseContext,
+        eventName: "issue_comment",
+        eventAction: "created",
+        payload: {
+          issue: { number: 1, body: "Test" },
+          comment: { body: "@claude review", user: { type: "User" } },
+        } as any,
+        entityNumber: 1,
+        isPR: true,
+        inputs: {
+          ...baseContext.inputs,
+          multiAgentReview: "auto",
+          prompt: "Team guidance",
+        },
+      };
+
+      expect(detectMode(context)).toBe("review");
+    });
+
+    it("should NOT detect review mode for unknown multiAgentReview value (allowlist typo)", () => {
+      const context: GitHubContext = {
+        ...baseContext,
+        eventName: "pull_request",
+        eventAction: "opened",
+        payload: { pull_request: { number: 1 } } as any,
+        entityNumber: 1,
+        isPR: true,
+        inputs: { ...baseContext.inputs, multiAgentReview: "TRUE" },
+      };
+
+      expect(detectMode(context)).not.toBe("review");
+    });
+
+    it("should NOT detect review mode for arbitrary multiAgentReview string like 'yes'", () => {
+      const context: GitHubContext = {
+        ...baseContext,
+        eventName: "pull_request",
+        eventAction: "opened",
+        payload: { pull_request: { number: 1 } } as any,
+        entityNumber: 1,
+        isPR: true,
+        inputs: { ...baseContext.inputs, multiAgentReview: "yes" },
+      };
+
+      expect(detectMode(context)).not.toBe("review");
+    });
   });
 });
