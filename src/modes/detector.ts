@@ -8,41 +8,12 @@ import {
   isPullRequestReviewEvent,
 } from "../github/context";
 import { checkContainsTrigger } from "../github/validation/trigger";
+import { PR_ENTRY_ACTIONS, shouldEnterReviewMode } from "./review/detect";
 
 export type AutoDetectedMode = "tag" | "agent" | "review";
 
 export function detectMode(context: GitHubContext): AutoDetectedMode {
-  // Review mode: only for pull_request events (not comments on PRs)
-  if (
-    context.inputs.multiAgentReview !== "false" &&
-    isEntityContext(context) &&
-    context.isPR &&
-    isPullRequestEvent(context)
-  ) {
-    // "true": always use review mode for PR events
-    if (context.inputs.multiAgentReview === "true") {
-      return "review";
-    }
-    // "auto": yield to explicit prompt or trackProgress
-    if (
-      context.inputs.multiAgentReview === "auto" &&
-      !context.inputs.prompt &&
-      !context.inputs.trackProgress
-    ) {
-      const supportedActions = [
-        "opened",
-        "synchronize",
-        "ready_for_review",
-        "reopened",
-      ];
-      if (
-        context.eventAction &&
-        supportedActions.includes(context.eventAction)
-      ) {
-        return "review";
-      }
-    }
-  }
+  if (shouldEnterReviewMode(context)) return "review";
 
   // Validate track_progress usage
   if (context.inputs.trackProgress) {
@@ -94,13 +65,10 @@ export function detectMode(context: GitHubContext): AutoDetectedMode {
 
   // PR events (opened, synchronize, etc.)
   if (isEntityContext(context) && isPullRequestEvent(context)) {
-    const supportedActions = [
-      "opened",
-      "synchronize",
-      "ready_for_review",
-      "reopened",
-    ];
-    if (context.eventAction && supportedActions.includes(context.eventAction)) {
+    if (
+      context.eventAction &&
+      (PR_ENTRY_ACTIONS as readonly string[]).includes(context.eventAction)
+    ) {
       // If prompt is provided, use agent mode (default for automation)
       if (context.inputs.prompt) {
         return "agent";
@@ -130,16 +98,12 @@ function validateTrackProgressEvent(context: GitHubContext): void {
 
   // Additionally validate PR actions
   if (context.eventName === "pull_request" && context.eventAction) {
-    const validActions = [
-      "opened",
-      "synchronize",
-      "ready_for_review",
-      "reopened",
-    ];
-    if (!validActions.includes(context.eventAction)) {
+    if (
+      !(PR_ENTRY_ACTIONS as readonly string[]).includes(context.eventAction)
+    ) {
       throw new Error(
         `track_progress for pull_request events is only supported for actions: ` +
-          `${validActions.join(", ")}. Current action: ${context.eventAction}`,
+          `${PR_ENTRY_ACTIONS.join(", ")}. Current action: ${context.eventAction}`,
       );
     }
   }
