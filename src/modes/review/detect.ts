@@ -7,7 +7,7 @@ import {
 import type { GitHubContext } from "../../github/context";
 import { escapeRegExp } from "../../github/validation/trigger";
 
-export const REVIEW_PR_ACTIONS = [
+export const PR_ENTRY_ACTIONS = [
   "opened",
   "synchronize",
   "ready_for_review",
@@ -55,7 +55,7 @@ export function shouldEnterReviewMode(context: GitHubContext): boolean {
   const isPrOpenLike =
     isPullRequestEvent(context) &&
     context.eventAction !== undefined &&
-    (REVIEW_PR_ACTIONS as readonly string[]).includes(context.eventAction);
+    (PR_ENTRY_ACTIONS as readonly string[]).includes(context.eventAction);
 
   if (isPrOpenLike) return true;
   return hasCommentTriggerPhrase(context);

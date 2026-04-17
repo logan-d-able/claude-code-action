@@ -32,6 +32,8 @@ export async function resolveRestoreBase(
     isPullRequestReviewEvent(context) ||
     isPullRequestReviewCommentEvent(context)
   ) {
+    // Validation sits outside try/catch: payload data is local, so the only
+    // failure mode is a malformed ref — which should surface, not be swallowed.
     const ref = context.payload.pull_request.base.ref;
     validateBranchName(ref);
     return ref;
@@ -44,6 +46,8 @@ export async function resolveRestoreBase(
         repo: context.repository.repo,
         pull_number: context.entityNumber,
       });
+      // Validation sits inside try/catch: both the network call and the ref
+      // check can fail transiently, and both should degrade to "skip restore".
       validateBranchName(pr.base.ref);
       return pr.base.ref;
     } catch (err) {
