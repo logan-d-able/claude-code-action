@@ -2,8 +2,8 @@
  * Integration tests for `runMultiAgentReview`.
  *
  * These mock `runClaude` and module-level side-effecting helpers
- * (`fetchGitHubData`, `prepareMcpConfig`, prompt writers) so we can verify
- * the orchestration flow without hitting disk, the network, or the CLI.
+ * (`prepareMcpConfig`, `fetchPullRequestPatches`) so we can verify the
+ * orchestration flow without hitting disk, the network, or the CLI.
  *
  * Covered scenarios:
  *   1. Happy path: R1 succeeds for all agents, synthesis succeeds.
@@ -12,6 +12,9 @@
  *   4. Worker `runClaude` is never given GitHub MCP tools (byte-level).
  *   5. `prepareResult.commentId` (tag-mode tracking comment) is never
  *      referenced by the orchestrator — invariant #1 in orchestrator.ts.
+ *   6. Synthesis claudeArgs rebinds MCP comment id to synthesis id.
+ *   7. `fetchGitHubData` is never called from orchestrator (data reused from
+ *      `prepareResult.githubData`).
  */
 
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
@@ -29,6 +32,7 @@ type MockRunClaudeCall = {
 
 const TAG_TRACKING_COMMENT_ID = 111_111_111;
 const SYNTHESIS_COMMENT_ID = 222_222_222;
+const PROMPT_FILE_PATH = "/tmp/claude-prompts/claude-prompt.txt";
 
 function makeContext(
   overrides: Partial<ParsedGitHubContext["inputs"]> = {},
@@ -78,9 +82,11 @@ function makeOctokit(): {
   octokit: Octokits;
   createCalls: Array<{ body: string }>;
   updateCalls: Array<{ comment_id: number; body: string }>;
+  listFilesCalls: Array<Record<string, unknown>>;
 } {
   const createCalls: Array<{ body: string }> = [];
   const updateCalls: Array<{ comment_id: number; body: string }> = [];
+  const listFilesCalls: Array<Record<string, unknown>> = [];
   const octokit = {
     rest: {
       issues: {
@@ -93,9 +99,15 @@ function makeOctokit(): {
           return { data: { id: args.comment_id } };
         },
       },
+      pulls: {
+        listFiles: async (args: any) => {
+          listFilesCalls.push(args);
+          return { data: [] };
+        },
+      },
     },
   } as unknown as Octokits;
-  return { octokit, createCalls, updateCalls };
+  return { octokit, createCalls, updateCalls, listFilesCalls };
 }
 
 const PREPARE_RESULT = {
@@ -105,8 +117,17 @@ const PREPARE_RESULT = {
     baseBranch: "main",
     currentBranch: "feat/x",
   },
+  promptFilePath: PROMPT_FILE_PATH,
   mcpConfig: "{}",
   claudeArgs: "--permission-mode acceptEdits",
+  githubData: {
+    contextData: { body: "pr body", title: "title" } as any,
+    comments: [],
+    changedFiles: [],
+    changedFilesWithSHA: [],
+    reviewData: null,
+    imageUrlMap: new Map(),
+  },
 };
 
 let runClaudeCalls: MockRunClaudeCall[] = [];
@@ -114,9 +135,13 @@ let runClaudeImpl: (
   promptPath: string,
   options: any,
 ) => Promise<any> = async () => ({ conclusion: "success" });
+let fetchGitHubDataCalled = 0;
+let prepareMcpConfigCalls: Array<Record<string, unknown>> = [];
 
 beforeEach(() => {
   runClaudeCalls = [];
+  fetchGitHubDataCalled = 0;
+  prepareMcpConfigCalls = [];
   runClaudeImpl = async () => ({ conclusion: "success" });
 
   mock.module("../../../base-action/src/run-claude", () => ({
@@ -127,13 +152,13 @@ beforeEach(() => {
   }));
 
   mock.module("../../../src/github/data/fetcher", () => ({
-    fetchGitHubData: async () => ({
-      contextData: { body: "pr body" },
-      comments: [],
-      changedFilesWithSHA: [],
-      reviewData: [],
-      imageUrlMap: new Map(),
-    }),
+    fetchGitHubData: async () => {
+      fetchGitHubDataCalled++;
+      throw new Error(
+        "INVARIANT: fetchGitHubData must not be called from the review orchestrator",
+      );
+    },
+    fetchPullRequestPatches: async () => new Map<string, string | undefined>(),
     extractTriggerTimestamp: () => "2026-04-17T00:00:00Z",
     extractOriginalTitle: () => "title",
     extractOriginalBody: () => "body",
@@ -141,24 +166,24 @@ beforeEach(() => {
 
   mock.module("../../../src/github/data/formatter", () => ({
     formatContext: () => "ctx",
-    formatBody: () => "body",
+    formatBody: () => "pr-body",
+    formatChangedFileDiffs: () => "diffs",
     formatChangedFilesWithSHA: () => "files",
     formatComments: () => "comments",
     formatReviewComments: () => "reviews",
   }));
 
   mock.module("../../../src/mcp/install-mcp-server", () => ({
-    prepareMcpConfig: async () => '{"mcpServers":{}}',
-  }));
-
-  mock.module("../../../src/modes/review/prompts", () => ({
-    SYNTHESIS_COMMENT_MARKER: "## Multi-agent review",
-    buildGitHubContextMarkdown: () => "markdown",
-    writeAgentPrompt: async ({ agent }: { agent: { id: string } }) =>
-      `/tmp/prompt-r1-${agent.id}.txt`,
-    writeDebatePrompt: async ({ agent }: { agent: { id: string } }) =>
-      `/tmp/prompt-r2-${agent.id}.txt`,
-    writeSynthesisPrompt: async () => "/tmp/prompt-synthesis.txt",
+    prepareMcpConfig: async (params: Record<string, unknown>) => {
+      prepareMcpConfigCalls.push(params);
+      return JSON.stringify({
+        mcpServers: {
+          github_comment: {
+            env: { CLAUDE_COMMENT_ID: String(params.claudeCommentId) },
+          },
+        },
+      });
+    },
   }));
 });
 
@@ -176,7 +201,6 @@ describe("runMultiAgentReview", () => {
           sessionId: "synthesis-session",
         };
       }
-      // R1 agents — return structured findings
       return {
         conclusion: "success",
         structuredOutput: JSON.stringify({
@@ -203,7 +227,6 @@ describe("runMultiAgentReview", () => {
     expect(runClaudeCalls).toHaveLength(4); // 3 R1 + 1 synthesis
     expect(createCalls).toHaveLength(1);
     expect(createCalls[0]!.body.startsWith("## Multi-agent review")).toBe(true);
-    // No updateComment on happy path — synthesis agent updates via MCP.
     expect(updateCalls).toHaveLength(0);
   });
 
@@ -275,7 +298,7 @@ describe("runMultiAgentReview", () => {
     expect(updateCalls[0]!.body).toContain("x.ts:5");
   });
 
-  it("worker claudeArgs never include github MCP tools or write permissions", async () => {
+  it("worker claudeArgs never include github MCP tools, --mcp-config, or write permissions", async () => {
     runClaudeImpl = async (_promptPath, options) => {
       if (options.executionFilePath?.includes("synthesis")) {
         return { conclusion: "success" };
@@ -317,9 +340,124 @@ describe("runMultiAgentReview", () => {
     }
   });
 
+  it("worker promptPath equals prepareResult.promptFilePath (base prompt reused)", async () => {
+    runClaudeImpl = async (_promptPath, options) => {
+      if (options.executionFilePath?.includes("synthesis")) {
+        return { conclusion: "success" };
+      }
+      return {
+        conclusion: "success",
+        structuredOutput: JSON.stringify({
+          agent_id: inferAgentIdFromExecPath(options.executionFilePath),
+          agent_name: "Agent",
+          summary: "ok",
+          findings: [],
+        }),
+      };
+    };
+
+    const { octokit } = makeOctokit();
+    const { runMultiAgentReview } = await import(
+      "../../../src/modes/review/orchestrator"
+    );
+    await runMultiAgentReview({
+      context: makeContext(),
+      octokit,
+      githubToken: "token",
+      prepareResult: PREPARE_RESULT,
+    });
+
+    for (const call of runClaudeCalls) {
+      expect(call.promptPath).toBe(PROMPT_FILE_PATH);
+    }
+  });
+
+  it("worker appendSystemPrompt identifies the sub-agent role and ignores parent write directives", async () => {
+    runClaudeImpl = async (_promptPath, options) => {
+      if (options.executionFilePath?.includes("synthesis")) {
+        return { conclusion: "success" };
+      }
+      return {
+        conclusion: "success",
+        structuredOutput: JSON.stringify({
+          agent_id: inferAgentIdFromExecPath(options.executionFilePath),
+          agent_name: "Agent",
+          summary: "ok",
+          findings: [],
+        }),
+      };
+    };
+
+    const { octokit } = makeOctokit();
+    const { runMultiAgentReview } = await import(
+      "../../../src/modes/review/orchestrator"
+    );
+    await runMultiAgentReview({
+      context: makeContext(),
+      octokit,
+      githubToken: "token",
+      prepareResult: PREPARE_RESULT,
+    });
+
+    const workerCalls = runClaudeCalls.filter(
+      (c) => !c.options.executionFilePath?.includes("synthesis"),
+    );
+    for (const call of workerCalls) {
+      const appendSystemPrompt = call.options.appendSystemPrompt ?? "";
+      expect(appendSystemPrompt).toContain("sub-agent");
+      expect(appendSystemPrompt).toContain("PARENT workflow prompt");
+      expect(appendSystemPrompt).toContain("ignore any directive");
+    }
+  });
+
+  it("synthesis claudeArgs rebind MCP comment id to synthesis id, not tag tracking id", async () => {
+    runClaudeImpl = async (_promptPath, options) => {
+      if (options.executionFilePath?.includes("synthesis")) {
+        return { conclusion: "success" };
+      }
+      return {
+        conclusion: "success",
+        structuredOutput: JSON.stringify({
+          agent_id: inferAgentIdFromExecPath(options.executionFilePath),
+          agent_name: "Agent",
+          summary: "ok",
+          findings: [],
+        }),
+      };
+    };
+
+    const { octokit } = makeOctokit();
+    const { runMultiAgentReview } = await import(
+      "../../../src/modes/review/orchestrator"
+    );
+    await runMultiAgentReview({
+      context: makeContext(),
+      octokit,
+      githubToken: "token",
+      prepareResult: PREPARE_RESULT,
+    });
+
+    const synthesisCall = runClaudeCalls.find((c) =>
+      c.options.executionFilePath?.includes("synthesis"),
+    );
+    expect(synthesisCall).toBeDefined();
+    const args = synthesisCall!.options.claudeArgs ?? "";
+    // Synthesis must still have the comment-update and inline-comment MCP tools.
+    expect(args).toContain("mcp__github_comment__update_claude_comment");
+    // The MCP config the synthesis agent receives must carry the synthesis
+    // comment id, NOT the tag-mode tracking comment id.
+    expect(args).toContain(String(SYNTHESIS_COMMENT_ID));
+    expect(args).not.toContain(String(TAG_TRACKING_COMMENT_ID));
+
+    // And prepareMcpConfig must have been called with synthesis id for the
+    // synthesis build.
+    const synthesisPrepareCall = prepareMcpConfigCalls.find(
+      (p) => p.claudeCommentId === String(SYNTHESIS_COMMENT_ID),
+    );
+    expect(synthesisPrepareCall).toBeDefined();
+  });
+
   it("never reads prepareResult.commentId (tag-mode tracking comment invariant)", async () => {
-    // Build a prepareResult whose commentId access would throw, to prove
-    // the orchestrator only touches branchInfo, mcpConfig, claudeArgs.
     const trapPrepareResult = {
       ...PREPARE_RESULT,
       get commentId(): number {
@@ -356,6 +494,36 @@ describe("runMultiAgentReview", () => {
         prepareResult: trapPrepareResult as typeof PREPARE_RESULT,
       }),
     ).resolves.toBeDefined();
+  });
+
+  it("never calls fetchGitHubData from orchestrator (reuses prepareResult.githubData)", async () => {
+    runClaudeImpl = async (_promptPath, options) => {
+      if (options.executionFilePath?.includes("synthesis")) {
+        return { conclusion: "success" };
+      }
+      return {
+        conclusion: "success",
+        structuredOutput: JSON.stringify({
+          agent_id: inferAgentIdFromExecPath(options.executionFilePath),
+          agent_name: "Agent",
+          summary: "ok",
+          findings: [],
+        }),
+      };
+    };
+
+    const { octokit } = makeOctokit();
+    const { runMultiAgentReview } = await import(
+      "../../../src/modes/review/orchestrator"
+    );
+    await runMultiAgentReview({
+      context: makeContext(),
+      octokit,
+      githubToken: "token",
+      prepareResult: PREPARE_RESULT,
+    });
+
+    expect(fetchGitHubDataCalled).toBe(0);
   });
 
   it("runs debate round when reviewDebateRounds=1", async () => {
@@ -408,6 +576,68 @@ describe("runMultiAgentReview", () => {
     });
     // 3 R1 + 3 R2 + 1 synthesis
     expect(runClaudeCalls).toHaveLength(7);
+  });
+
+  it("honors reviewDebateRounds values above 1 and threads prior rebuttals", async () => {
+    runClaudeImpl = async (_promptPath, options) => {
+      if (options.executionFilePath?.includes("synthesis")) {
+        return { conclusion: "success" };
+      }
+      if (options.executionFilePath?.includes("r2-")) {
+        return {
+          conclusion: "success",
+          structuredOutput: JSON.stringify({
+            agent_id: inferAgentIdFromExecPath(options.executionFilePath),
+            agent_name: "Agent",
+            responses: [
+              {
+                regarding_finding_title: "X",
+                stance: "agree",
+                reasoning: "because",
+              },
+            ],
+          }),
+        };
+      }
+      return {
+        conclusion: "success",
+        structuredOutput: JSON.stringify({
+          agent_id: inferAgentIdFromExecPath(options.executionFilePath),
+          agent_name: "Agent",
+          summary: "ok",
+          findings: [
+            {
+              severity: "minor",
+              title: "X",
+              description: "x",
+            },
+          ],
+        }),
+      };
+    };
+
+    const { octokit } = makeOctokit();
+    const { runMultiAgentReview } = await import(
+      "../../../src/modes/review/orchestrator"
+    );
+    await runMultiAgentReview({
+      context: makeContext({ reviewDebateRounds: "3" }),
+      octokit,
+      githubToken: "token",
+      prepareResult: PREPARE_RESULT,
+    });
+
+    expect(runClaudeCalls).toHaveLength(13); // 3 R1 + 9 R2 + 1 synthesis
+    const r2Calls = runClaudeCalls.filter((c) =>
+      c.options.executionFilePath?.includes("r2-"),
+    );
+    expect(r2Calls).toHaveLength(9);
+    // Third round's appendSystemPrompt should surface the "Prior debate
+    // rounds" header, proving rebuttals thread through.
+    const round3Calls = r2Calls.slice(6);
+    for (const call of round3Calls) {
+      expect(call.options.appendSystemPrompt).toContain("Prior debate rounds");
+    }
   });
 });
 

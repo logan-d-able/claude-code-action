@@ -12,6 +12,12 @@ export type ReviewAgent = {
   name: string;
   /** `appendSystemPrompt` body — narrows Claude's attention to this perspective. */
   perspective: string;
+  /**
+   * Exact allowlist this sub-agent is permitted to call. Must be read-only:
+   * no MCP servers, no Edit/Write, no Bash. The orchestrator passes this set
+   * verbatim to `--allowedTools`; callers do not inherit parent claudeArgs.
+   */
+  tools: string[];
 };
 
 /**
@@ -33,6 +39,8 @@ export function assertValidAgentId(id: string): void {
   }
 }
 
+const READ_ONLY_TOOLS = ["Glob", "Grep", "LS", "Read"];
+
 export const DEFAULT_REVIEW_AGENTS: ReviewAgent[] = [
   {
     id: "correctness-reviewer",
@@ -44,6 +52,7 @@ export const DEFAULT_REVIEW_AGENTS: ReviewAgent[] = [
       "the stated intent of the change. Ignore style, performance, and security",
       "unless they directly cause a correctness bug.",
     ].join(" "),
+    tools: [...READ_ONLY_TOOLS],
   },
   {
     id: "security-reviewer",
@@ -55,6 +64,7 @@ export const DEFAULT_REVIEW_AGENTS: ReviewAgent[] = [
       "default configurations, privilege escalation, and supply-chain risk.",
       "Ignore correctness and style issues unless they have security impact.",
     ].join(" "),
+    tools: [...READ_ONLY_TOOLS],
   },
   {
     id: "quality-reviewer",
@@ -66,6 +76,7 @@ export const DEFAULT_REVIEW_AGENTS: ReviewAgent[] = [
       "Ignore correctness bugs and security issues — those are owned by other",
       "reviewers. Flag only issues that matter for long-term health of the code.",
     ].join(" "),
+    tools: [...READ_ONLY_TOOLS],
   },
 ];
 

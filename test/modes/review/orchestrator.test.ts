@@ -1,10 +1,15 @@
 import { describe, expect, it } from "bun:test";
 import {
-  buildWorkerClaudeArgs,
+  buildSubAgentClaudeArgs,
   parseDebateRounds,
 } from "../../../src/modes/review/orchestrator";
-import { SYNTHESIS_COMMENT_MARKER } from "../../../src/modes/review/prompts";
+import {
+  SYNTHESIS_COMMENT_MARKER,
+  buildSubAgentSystemPrompt,
+} from "../../../src/modes/review/prompts";
 import { buildFallbackSynthesisBody } from "../../../src/modes/review/synthesis-comment";
+import { AGENT_FINDINGS_SCHEMA } from "../../../src/modes/review/schemas";
+import type { ReviewAgent } from "../../../src/modes/review/agents";
 
 describe("parseDebateRounds", () => {
   it("returns 0 for undefined / empty", () => {
@@ -17,11 +22,11 @@ describe("parseDebateRounds", () => {
     expect(parseDebateRounds("1")).toBe(1);
   });
 
-  it("clamps above the upper bound (max 1 round)", () => {
-    expect(parseDebateRounds("2")).toBe(1);
-    expect(parseDebateRounds("3")).toBe(1);
-    expect(parseDebateRounds("4")).toBe(1);
-    expect(parseDebateRounds("100")).toBe(1);
+  it("clamps above the upper bound (max 3 rounds)", () => {
+    expect(parseDebateRounds("2")).toBe(2);
+    expect(parseDebateRounds("3")).toBe(3);
+    expect(parseDebateRounds("4")).toBe(3);
+    expect(parseDebateRounds("100")).toBe(3);
   });
 
   it("clamps below the lower bound", () => {
@@ -35,44 +40,133 @@ describe("parseDebateRounds", () => {
   });
 });
 
-describe("buildWorkerClaudeArgs", () => {
-  const args = buildWorkerClaudeArgs();
+describe("buildSubAgentClaudeArgs", () => {
+  const tools = ["Glob", "Grep", "LS", "Read"];
+  const args = buildSubAgentClaudeArgs(tools, AGENT_FINDINGS_SCHEMA);
 
   it("uses acceptEdits permission mode", () => {
     expect(args).toContain("--permission-mode acceptEdits");
   });
 
-  it("allows only the four read-only tools", () => {
+  it("passes the agent's declared tools verbatim as --allowedTools", () => {
     expect(args).toContain('--allowedTools "Glob,Grep,LS,Read"');
   });
 
-  it("contains a JSON schema flag", () => {
+  it("emits the --json-schema flag with the provided schema", () => {
     expect(args).toContain("--json-schema");
+    expect(args).toContain(JSON.stringify(AGENT_FINDINGS_SCHEMA));
   });
 
-  it("never grants any GitHub MCP tool to workers", () => {
+  it("never emits an --mcp-config flag — workers have no MCP servers", () => {
+    expect(args).not.toContain("--mcp-config");
+  });
+
+  it("never grants any GitHub MCP tool to sub-agents", () => {
     expect(args).not.toContain("mcp__github_comment__update_claude_comment");
     expect(args).not.toContain("mcp__github_file_ops");
     expect(args).not.toContain("mcp__github_inline_comment");
     expect(args).not.toContain("mcp__github_ci");
   });
 
-  it("never grants write-capable tools to workers", () => {
+  it("never grants write-capable tools to sub-agents when given a read-only toolset", () => {
     const allowedToolsMatch = args.match(/--allowedTools "([^"]+)"/);
     expect(allowedToolsMatch).not.toBeNull();
-    const tools = allowedToolsMatch![1]!.split(",");
-    expect(tools).toEqual(["Glob", "Grep", "LS", "Read"]);
-    expect(tools).not.toContain("Edit");
-    expect(tools).not.toContain("Write");
-    expect(tools.some((t) => t.startsWith("Bash"))).toBe(false);
+    const parsed = allowedToolsMatch![1]!.split(",");
+    expect(parsed).toEqual(tools);
+    expect(parsed).not.toContain("Edit");
+    expect(parsed).not.toContain("Write");
+    expect(parsed.some((t) => t.startsWith("Bash"))).toBe(false);
+  });
+
+  it("honors whatever tool list the ReviewAgent declares", () => {
+    const customTools = ["Glob", "Read"];
+    const customArgs = buildSubAgentClaudeArgs(
+      customTools,
+      AGENT_FINDINGS_SCHEMA,
+    );
+    expect(customArgs).toContain('--allowedTools "Glob,Read"');
+  });
+});
+
+describe("buildSubAgentSystemPrompt", () => {
+  const agent: ReviewAgent = {
+    id: "correctness-reviewer",
+    name: "Correctness Reviewer",
+    perspective: "focus on correctness",
+    tools: ["Glob", "Grep", "LS", "Read"],
+  };
+
+  it("identifies the sub-agent role in the review role", () => {
+    const prompt = buildSubAgentSystemPrompt({
+      role: "review",
+      agent,
+      githubContextMarkdown: "ctx",
+    });
+    expect(prompt).toContain("`correctness-reviewer`");
+    expect(prompt).toContain("sub-agent");
+    expect(prompt).toContain("focus on correctness");
+    expect(prompt).toContain("## PR context");
+    expect(prompt).toContain("ctx");
+    expect(prompt).toContain("--json-schema");
+    expect(prompt).toContain('agent_id="correctness-reviewer"');
+  });
+
+  it("tells the sub-agent to ignore parent directives that write to GitHub", () => {
+    const prompt = buildSubAgentSystemPrompt({
+      role: "review",
+      agent,
+      githubContextMarkdown: "ctx",
+    });
+    expect(prompt).toContain("PARENT workflow prompt");
+    expect(prompt).toContain("ignore any directive");
+    expect(prompt).toContain("editing files");
+  });
+
+  it("labels debate rounds with their round number", () => {
+    const prompt = buildSubAgentSystemPrompt({
+      role: "debate",
+      agent,
+      githubContextMarkdown: "ctx",
+      debateRoundNumber: 2,
+      ownFindings: {
+        agent_id: "correctness-reviewer",
+        agent_name: "Correctness Reviewer",
+        summary: "s",
+        findings: [],
+      },
+      otherFindings: [],
+    });
+    expect(prompt).toContain("debate round 2");
+  });
+
+  it("directs synthesis to update the synthesis comment id via MCP", () => {
+    const prompt = buildSubAgentSystemPrompt({
+      role: "synthesis",
+      githubContextMarkdown: "ctx",
+      synthesisCommentId: 99,
+    });
+    expect(prompt).toContain("`synthesis`");
+    expect(prompt).toContain("mcp__github_comment__update_claude_comment");
+    expect(prompt).toContain(
+      "mcp__github_inline_comment__create_inline_comment",
+    );
+    expect(prompt).toContain("99");
+    expect(prompt).toContain(SYNTHESIS_COMMENT_MARKER);
+    expect(prompt).toContain("confirmed: true");
+  });
+
+  it("synthesis role does not require an agent", () => {
+    expect(() =>
+      buildSubAgentSystemPrompt({
+        role: "synthesis",
+        githubContextMarkdown: "ctx",
+      }),
+    ).not.toThrow();
   });
 });
 
 describe("SYNTHESIS_COMMENT_MARKER", () => {
   it("is a distinctive heading that sticky-comment matchers will not reuse", () => {
-    // The sticky-comment matcher in create-initial.ts matches on exact body
-    // equality against the tag-mode template. The synthesis marker must be
-    // different from any phrase the tag template produces.
     expect(SYNTHESIS_COMMENT_MARKER).toBe("## Multi-agent review");
     expect(SYNTHESIS_COMMENT_MARKER.startsWith("#")).toBe(true);
   });

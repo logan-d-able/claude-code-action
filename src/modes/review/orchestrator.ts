@@ -5,9 +5,13 @@
  *   1. `prepareTagMode` has already run and created the tracking comment.
  *      We never read or mutate `prepareResult.commentId` — it belongs to tag
  *      mode's finally-block update flow.
- *   2. Workers run with a pure read-only allowlist and no MCP servers.
+ *   2. Workers run with a pure read-only allowlist derived from
+ *      `ReviewAgent.tools` and NO MCP servers — they physically cannot touch
+ *      GitHub.
  *   3. The synthesis comment body begins with `SYNTHESIS_COMMENT_MARKER` so
  *      sticky-comment reuse never targets it.
+ *   4. Synthesis inherits the tag-mode claudeArgs builder, but with the MCP
+ *      comment id rebound to the synthesis comment — NOT the tag tracking id.
  */
 
 import { runClaude } from "../../../base-action/src/run-claude";
@@ -15,28 +19,22 @@ import type { ClaudeRunResult } from "../../../base-action/src/run-claude-sdk";
 import type { Octokits } from "../../github/api/client";
 import type { ParsedGitHubContext } from "../../github/context";
 import { isPullRequestEvent } from "../../github/context";
-import {
-  fetchGitHubData,
-  extractTriggerTimestamp,
-  extractOriginalTitle,
-  extractOriginalBody,
-} from "../../github/data/fetcher";
+import { fetchPullRequestPatches } from "../../github/data/fetcher";
 import {
   formatBody,
+  formatChangedFileDiffs,
   formatChangedFilesWithSHA,
   formatComments,
   formatContext,
   formatReviewComments,
 } from "../../github/data/formatter";
-import { prepareMcpConfig } from "../../mcp/install-mcp-server";
+import { buildTagModeClaudeArgs } from "../tag/build-claude-args";
 import type { PrepareTagResult } from "../tag";
 import { DEFAULT_REVIEW_AGENTS } from "./agents";
 import type { ReviewAgent } from "./agents";
 import {
   buildGitHubContextMarkdown,
-  writeAgentPrompt,
-  writeDebatePrompt,
-  writeSynthesisPrompt,
+  buildSubAgentSystemPrompt,
 } from "./prompts";
 import {
   AGENT_FINDINGS_SCHEMA,
@@ -57,67 +55,49 @@ export type RunMultiAgentReviewParams = {
   prepareResult: PrepareTagResult;
 };
 
-const WORKER_ALLOWED_TOOLS = ["Glob", "Grep", "LS", "Read"] as const;
-
-/**
- * Parse `reviewDebateRounds`, guarding against NaN and clamping to [0, 1].
- * Only one rebuttal round is currently meaningful: subsequent rounds would
- * re-debate the same Round 1 findings (the loop does not feed earlier
- * rebuttals back in), so they produce redundant output with no new signal.
- */
+/** Parse `reviewDebateRounds`, guarding against NaN and clamping to [0, 3]. */
 export function parseDebateRounds(raw: string | undefined): number {
   if (!raw) return 0;
   const n = Number.parseInt(raw, 10);
   if (!Number.isFinite(n)) return 0;
-  return Math.max(0, Math.min(1, n));
+  return Math.max(0, Math.min(3, n));
 }
 
 /**
- * Build the `claudeArgs` string for a worker agent. No MCP servers — workers
- * are intentionally denied any tool that could edit files, post comments, or
- * touch git history.
+ * Build the `claudeArgs` string for a sub-agent (worker or debate). No MCP
+ * servers — sub-agents are intentionally denied any tool that could edit
+ * files, post comments, or touch git history. Schema is passed to enforce
+ * structured JSON output.
  */
-export function buildWorkerClaudeArgs(): string {
-  return `--permission-mode acceptEdits --allowedTools "${WORKER_ALLOWED_TOOLS.join(",")}" --json-schema '${JSON.stringify(AGENT_FINDINGS_SCHEMA)}'`;
+export function buildSubAgentClaudeArgs(
+  tools: ReadonlyArray<string>,
+  schema: unknown,
+): string {
+  const toolList = tools.join(",");
+  const schemaJson = JSON.stringify(schema);
+  return `--permission-mode acceptEdits --allowedTools "${toolList}" --json-schema '${schemaJson}'`;
 }
 
-function buildDebateClaudeArgs(): string {
-  return `--permission-mode acceptEdits --allowedTools "${WORKER_ALLOWED_TOOLS.join(",")}" --json-schema '${JSON.stringify(AGENT_REBUTTAL_SCHEMA)}'`;
-}
-
+/**
+ * Build the `claudeArgs` for the synthesis agent. Reuses the tag-mode builder
+ * with the synthesis comment id swapped in, so synthesis has the same write
+ * capabilities (MCP comment update, inline comments, file ops) that the
+ * single-pass tag-mode review would have had — just targeting a different
+ * comment.
+ */
 async function buildSynthesisClaudeArgs(params: {
   githubToken: string;
   context: ParsedGitHubContext;
   synthesisCommentId: number;
   branchInfo: PrepareTagResult["branchInfo"];
 }): Promise<string> {
-  const { githubToken, context, synthesisCommentId, branchInfo } = params;
-
-  const allowedTools = [
-    "Glob",
-    "Grep",
-    "LS",
-    "Read",
-    "mcp__github_comment__update_claude_comment",
-    "mcp__github_inline_comment__create_inline_comment",
-  ];
-
-  // Reuse prepareMcpConfig so the synthesis comment server is wired with the
-  // synthesis comment id — NOT the tag-mode tracking comment id.
-  const mcpConfig = await prepareMcpConfig({
-    githubToken,
-    owner: context.repository.owner,
-    repo: context.repository.repo,
-    branch: branchInfo.claudeBranch || branchInfo.currentBranch,
-    baseBranch: branchInfo.baseBranch,
-    claudeCommentId: synthesisCommentId.toString(),
-    allowedTools,
-    mode: "tag",
-    context,
+  const { claudeArgs } = await buildTagModeClaudeArgs({
+    context: params.context,
+    githubToken: params.githubToken,
+    branchInfo: params.branchInfo,
+    claudeCommentId: params.synthesisCommentId.toString(),
   });
-
-  const escaped = mcpConfig.replace(/'/g, "'\\''");
-  return `--mcp-config '${escaped}' --permission-mode acceptEdits --allowedTools "${allowedTools.join(",")}"`;
+  return claudeArgs;
 }
 
 function executionFilePath(suffix: string): string {
@@ -125,32 +105,28 @@ function executionFilePath(suffix: string): string {
   return `${base}/claude-execution-review-${suffix}.json`;
 }
 
-async function fetchAndFormatContext(params: {
+async function buildContextMarkdown(params: {
   context: ParsedGitHubContext;
   octokit: Octokits;
+  prepareResult: PrepareTagResult;
 }): Promise<string> {
-  const { context, octokit } = params;
-  const triggerTime = extractTriggerTimestamp(context);
-  const originalTitle = extractOriginalTitle(context);
-  const originalBody = extractOriginalBody(context);
+  const { context, octokit, prepareResult } = params;
+  const data = prepareResult.githubData;
 
-  const data = await fetchGitHubData({
-    octokits: octokit,
-    repository: `${context.repository.owner}/${context.repository.repo}`,
-    prNumber: context.entityNumber.toString(),
-    isPR: context.isPR,
-    triggerUsername: context.actor,
-    triggerTime,
-    originalTitle,
-    originalBody,
-    includeCommentsByActor: context.inputs.includeCommentsByActor,
-    excludeCommentsByActor: context.inputs.excludeCommentsByActor,
-  });
+  const patches = context.isPR
+    ? await fetchPullRequestPatches({
+        octokits: octokit,
+        owner: context.repository.owner,
+        repo: context.repository.repo,
+        prNumber: context.entityNumber.toString(),
+      })
+    : new Map<string, string | undefined>();
 
   return buildGitHubContextMarkdown({
     contextSummary: formatContext(data.contextData, context.isPR),
     prBody: formatBody(data.contextData.body ?? "", data.imageUrlMap),
     changedFilesBlock: formatChangedFilesWithSHA(data.changedFilesWithSHA),
+    diffBlock: formatChangedFileDiffs(data.changedFilesWithSHA, patches),
     commentsBlock: formatComments(data.comments, data.imageUrlMap),
     reviewsBlock: formatReviewComments(data.reviewData, data.imageUrlMap),
   });
@@ -159,31 +135,34 @@ async function fetchAndFormatContext(params: {
 async function runAgentRoundOne(params: {
   agent: ReviewAgent;
   githubContextMarkdown: string;
+  promptFilePath: string;
 }): Promise<AgentFindings> {
-  const promptPath = await writeAgentPrompt({
-    agent: params.agent,
-    githubContextMarkdown: params.githubContextMarkdown,
+  const { agent, githubContextMarkdown, promptFilePath } = params;
+  const appendSystemPrompt = buildSubAgentSystemPrompt({
+    role: "review",
+    agent,
+    githubContextMarkdown,
   });
 
-  const result = await runClaude(promptPath, {
-    claudeArgs: buildWorkerClaudeArgs(),
-    appendSystemPrompt: params.agent.perspective,
+  const result = await runClaude(promptFilePath, {
+    claudeArgs: buildSubAgentClaudeArgs(agent.tools, AGENT_FINDINGS_SCHEMA),
+    appendSystemPrompt,
     model: process.env.ANTHROPIC_MODEL,
     pathToClaudeCodeExecutable:
       process.env.INPUT_PATH_TO_CLAUDE_CODE_EXECUTABLE,
     showFullOutput: process.env.INPUT_SHOW_FULL_OUTPUT,
-    executionFilePath: executionFilePath(`r1-${params.agent.id}`),
+    executionFilePath: executionFilePath(`r1-${agent.id}`),
   });
 
   if (!result.structuredOutput) {
     throw new Error(
-      `Agent ${params.agent.id} returned no structured output (conclusion: ${result.conclusion})`,
+      `Agent ${agent.id} returned no structured output (conclusion: ${result.conclusion})`,
     );
   }
   return validateStructuredOutput<AgentFindings>(
     result.structuredOutput,
     ["agent_id", "agent_name", "summary", "findings"],
-    `Agent ${params.agent.id} Round 1`,
+    `Agent ${agent.id} Round 1`,
   );
 }
 
@@ -191,32 +170,50 @@ async function runAgentDebate(params: {
   agent: ReviewAgent;
   ownFindings: AgentFindings;
   otherFindings: AgentFindings[];
+  priorRoundRebuttals?: AgentRebuttal[];
+  roundNumber: number;
+  githubContextMarkdown: string;
+  promptFilePath: string;
 }): Promise<AgentRebuttal> {
-  const promptPath = await writeDebatePrompt({
-    agent: params.agent,
-    ownFindings: params.ownFindings,
-    otherFindings: params.otherFindings,
+  const {
+    agent,
+    ownFindings,
+    otherFindings,
+    priorRoundRebuttals,
+    roundNumber,
+    githubContextMarkdown,
+    promptFilePath,
+  } = params;
+
+  const appendSystemPrompt = buildSubAgentSystemPrompt({
+    role: "debate",
+    agent,
+    githubContextMarkdown,
+    debateRoundNumber: roundNumber,
+    ownFindings,
+    otherFindings,
+    priorRoundRebuttals,
   });
 
-  const result = await runClaude(promptPath, {
-    claudeArgs: buildDebateClaudeArgs(),
-    appendSystemPrompt: params.agent.perspective,
+  const result = await runClaude(promptFilePath, {
+    claudeArgs: buildSubAgentClaudeArgs(agent.tools, AGENT_REBUTTAL_SCHEMA),
+    appendSystemPrompt,
     model: process.env.ANTHROPIC_MODEL,
     pathToClaudeCodeExecutable:
       process.env.INPUT_PATH_TO_CLAUDE_CODE_EXECUTABLE,
     showFullOutput: process.env.INPUT_SHOW_FULL_OUTPUT,
-    executionFilePath: executionFilePath(`r2-${params.agent.id}`),
+    executionFilePath: executionFilePath(`r2-${agent.id}`),
   });
 
   if (!result.structuredOutput) {
     throw new Error(
-      `Agent ${params.agent.id} returned no structured output in debate round`,
+      `Agent ${agent.id} returned no structured output in debate round`,
     );
   }
   return validateStructuredOutput<AgentRebuttal>(
     result.structuredOutput,
     ["agent_id", "agent_name", "responses"],
-    `Agent ${params.agent.id} Debate`,
+    `Agent ${agent.id} Debate`,
   );
 }
 
@@ -239,11 +236,11 @@ export async function runMultiAgentReview(
   const agents = DEFAULT_REVIEW_AGENTS;
   const debateRounds = parseDebateRounds(context.inputs.reviewDebateRounds);
 
-  // Fetch GitHub data once; every agent reuses the same markdown so we don't
-  // multiply API calls by the agent count.
-  const githubContextMarkdown = await fetchAndFormatContext({
+  // Reuse the tag-mode fetched GitHub data; do not re-call fetchGitHubData.
+  const githubContextMarkdown = await buildContextMarkdown({
     context,
     octokit,
+    prepareResult,
   });
 
   // Pre-create the synthesis comment so we have a stable id to hand to the
@@ -257,7 +254,13 @@ export async function runMultiAgentReview(
 
   // Round 1: independent reviews in parallel.
   const round1Results = await Promise.allSettled(
-    agents.map((agent) => runAgentRoundOne({ agent, githubContextMarkdown })),
+    agents.map((agent) =>
+      runAgentRoundOne({
+        agent,
+        githubContextMarkdown,
+        promptFilePath: prepareResult.promptFilePath,
+      }),
+    ),
   );
 
   const allFindings: AgentFindings[] = [];
@@ -294,6 +297,7 @@ export async function runMultiAgentReview(
     );
 
     for (let round = 0; round < debateRounds; round++) {
+      const priorRoundRebuttals = allRebuttals.slice();
       const debateResults = await Promise.allSettled(
         participating.map((agent) => {
           const own = allFindings.find((f) => f.agent_id === agent.id);
@@ -307,6 +311,10 @@ export async function runMultiAgentReview(
             agent,
             ownFindings: own,
             otherFindings: others,
+            priorRoundRebuttals,
+            roundNumber: round + 1,
+            githubContextMarkdown,
+            promptFilePath: prepareResult.promptFilePath,
           });
         }),
       );
@@ -330,26 +338,45 @@ export async function runMultiAgentReview(
 
   // Synthesis. This is the only agent permitted to touch GitHub.
   try {
-    const synthesisPromptPath = await writeSynthesisPrompt({
-      allFindings,
-      allRebuttals,
-      githubContextMarkdown,
-      synthesisCommentId,
-    });
     const synthesisArgs = await buildSynthesisClaudeArgs({
       githubToken,
       context,
       synthesisCommentId,
       branchInfo: prepareResult.branchInfo,
     });
-    const synthesisResult = await runClaude(synthesisPromptPath, {
+    const synthesisAppendSystemPrompt = buildSubAgentSystemPrompt({
+      role: "synthesis",
+      githubContextMarkdown,
+      allFindings,
+      allRebuttals,
+      synthesisCommentId,
+    });
+
+    const synthesisResult = await runClaude(prepareResult.promptFilePath, {
       claudeArgs: synthesisArgs,
+      appendSystemPrompt: synthesisAppendSystemPrompt,
       model: process.env.ANTHROPIC_MODEL,
       pathToClaudeCodeExecutable:
         process.env.INPUT_PATH_TO_CLAUDE_CODE_EXECUTABLE,
       showFullOutput: process.env.INPUT_SHOW_FULL_OUTPUT,
       executionFilePath: executionFilePath("synthesis"),
     });
+
+    if (synthesisResult.conclusion !== "success") {
+      const reason = `synthesis conclusion: ${synthesisResult.conclusion}`;
+      try {
+        await updateSynthesisComment({
+          octokit,
+          context,
+          commentId: synthesisCommentId,
+          body: buildFallbackSynthesisBody(allFindings, reason),
+        });
+      } catch (fallbackError) {
+        console.error(
+          `[review] Fallback synthesis update failed: ${fallbackError instanceof Error ? fallbackError.message : String(fallbackError)}`,
+        );
+      }
+    }
 
     return {
       conclusion: synthesisResult.conclusion,
@@ -359,8 +386,6 @@ export async function runMultiAgentReview(
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     console.error(`[review] Synthesis failed: ${reason}`);
-    // Best-effort fallback: publish raw findings so the PR author still sees
-    // something actionable.
     try {
       await updateSynthesisComment({
         octokit,
