@@ -708,6 +708,14 @@ describe("runMultiAgentReview", () => {
       c.options.executionFilePath?.includes("r2-"),
     );
     expect(r2Calls).toHaveLength(9);
+    // Each debate-round/agent pair must have a unique executionFilePath so
+    // later rounds don't silently overwrite earlier ones' audit trail.
+    const r2Paths = r2Calls.map((c) => c.options.executionFilePath);
+    expect(new Set(r2Paths).size).toBe(9);
+    // Paths must embed the round number.
+    expect(r2Paths.filter((p) => p?.includes("r2-1-")).length).toBe(3);
+    expect(r2Paths.filter((p) => p?.includes("r2-2-")).length).toBe(3);
+    expect(r2Paths.filter((p) => p?.includes("r2-3-")).length).toBe(3);
     // Third round's appendSystemPrompt should surface the "Prior debate
     // rounds" header, proving rebuttals thread through.
     const round3Calls = r2Calls.slice(6);
@@ -719,6 +727,9 @@ describe("runMultiAgentReview", () => {
 
 function inferAgentIdFromExecPath(execPath?: string): string {
   if (!execPath) return "unknown";
-  const match = execPath.match(/r[12]-([a-z-]+)\.json/);
+  // r1 paths: `...r1-<agent>.json`
+  // r2 paths: `...r2-<round>-<agent>.json` (round number inserted to prevent
+  // debate-round log overwrites — see orchestrator.ts)
+  const match = execPath.match(/r[12]-(?:\d+-)?([a-z-]+)\.json/);
   return match?.[1] ?? "unknown";
 }

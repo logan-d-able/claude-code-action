@@ -237,7 +237,10 @@ async function runAgentDebate(params: {
     pathToClaudeCodeExecutable:
       process.env.INPUT_PATH_TO_CLAUDE_CODE_EXECUTABLE,
     showFullOutput: process.env.INPUT_SHOW_FULL_OUTPUT,
-    executionFilePath: executionFilePath(`r2-${agent.id}`),
+    // Include the round number — without it, debate rounds 2+ overwrite
+    // each earlier round's log for the same agent and the audit trail is
+    // silently lost.
+    executionFilePath: executionFilePath(`r2-${roundNumber}-${agent.id}`),
   });
 
   if (!result.structuredOutput) {
