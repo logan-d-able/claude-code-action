@@ -11,6 +11,12 @@ export type BuildTagModeClaudeArgsParams = {
     currentBranch: string;
   };
   claudeCommentId: string;
+  /**
+   * Additional tools to merge into the tag-mode allowlist. Used by the
+   * multi-agent review synthesis agent to request the inline-comment MCP
+   * tool, which tag mode itself does not need.
+   */
+  extraTools?: ReadonlyArray<string>;
 };
 
 export type BuildTagModeClaudeArgsResult = {
@@ -23,6 +29,7 @@ export async function buildTagModeClaudeArgs({
   githubToken,
   branchInfo,
   claudeCommentId,
+  extraTools,
 }: BuildTagModeClaudeArgsParams): Promise<BuildTagModeClaudeArgsResult> {
   const userClaudeArgs = process.env.CLAUDE_ARGS || "";
   const userAllowedMCPTools = parseAllowedTools(userClaudeArgs).filter((tool) =>
@@ -48,6 +55,7 @@ export async function buildTagModeClaudeArgs({
     "mcp__github_ci__get_workflow_run_details",
     "mcp__github_ci__download_job_log",
     ...userAllowedMCPTools,
+    ...(extraTools ?? []),
   ];
 
   // Add git commands when using git CLI (no API commit signing, or SSH signing)

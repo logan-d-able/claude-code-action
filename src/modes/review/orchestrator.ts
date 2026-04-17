@@ -96,6 +96,10 @@ async function buildSynthesisClaudeArgs(params: {
     githubToken: params.githubToken,
     branchInfo: params.branchInfo,
     claudeCommentId: params.synthesisCommentId.toString(),
+    // Tag mode never posts inline review comments, but synthesis needs this
+    // tool (AND the corresponding MCP server, which `prepareMcpConfig` only
+    // loads when the tool is in the allowlist — see install-mcp-server.ts).
+    extraTools: ["mcp__github_inline_comment__create_inline_comment"],
   });
   return claudeArgs;
 }
