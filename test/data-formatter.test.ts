@@ -3,6 +3,7 @@ import {
   formatContext,
   formatBody,
   formatComments,
+  formatChangedFileDiffs,
   formatReviewComments,
   formatChangedFiles,
   formatChangedFilesWithSHA,
@@ -794,5 +795,77 @@ describe("formatChangedFilesWithSHA", () => {
   test("returns empty string for empty files array", () => {
     const result = formatChangedFilesWithSHA([]);
     expect(result).toBe("");
+  });
+});
+
+describe("formatChangedFileDiffs", () => {
+  test("formats diff hunks for changed files", () => {
+    const files: GitHubFileWithSHA[] = [
+      {
+        path: "src/index.ts",
+        additions: 10,
+        deletions: 5,
+        changeType: "MODIFIED",
+        sha: "abc123",
+      },
+    ];
+    const patches = new Map<string, string | undefined>([
+      ["src/index.ts", "@@ -1,2 +1,2 @@\n-oldLine\n+newLine"],
+    ]);
+
+    const result = formatChangedFileDiffs(files, patches);
+    expect(result).toContain("### src/index.ts");
+    expect(result).toContain("```diff");
+    expect(result).toContain("-oldLine");
+    expect(result).toContain("+newLine");
+  });
+
+  test("marks patchless files as unavailable", () => {
+    const files: GitHubFileWithSHA[] = [
+      {
+        path: "assets/logo.png",
+        additions: 0,
+        deletions: 0,
+        changeType: "MODIFIED",
+        sha: "abc123",
+      },
+    ];
+
+    const result = formatChangedFileDiffs(files);
+    expect(result).toContain("Patch: unavailable");
+  });
+
+  test("omits the patch section when patches map is not provided", () => {
+    const files: GitHubFileWithSHA[] = [
+      {
+        path: "src/index.ts",
+        additions: 10,
+        deletions: 5,
+        changeType: "MODIFIED",
+        sha: "abc123",
+      },
+    ];
+
+    const result = formatChangedFileDiffs(files);
+    expect(result).toContain("Patch: unavailable");
+    expect(result).not.toContain("```diff");
+  });
+
+  test("adds a truncation marker when a patch exceeds the limit", () => {
+    const files: GitHubFileWithSHA[] = [
+      {
+        path: "src/index.ts",
+        additions: 10,
+        deletions: 5,
+        changeType: "MODIFIED",
+        sha: "abc123",
+      },
+    ];
+    const patches = new Map<string, string | undefined>([
+      ["src/index.ts", "0123456789abcdef"],
+    ]);
+
+    const result = formatChangedFileDiffs(files, patches, 8);
+    expect(result).toContain("[... diff truncated after 8 characters ...]");
   });
 });

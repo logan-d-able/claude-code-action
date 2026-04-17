@@ -144,3 +144,39 @@ export function formatChangedFilesWithSHA(
     )
     .join("\n");
 }
+
+export function formatChangedFileDiffs(
+  changedFiles: GitHubFileWithSHA[],
+  patches?: Map<string, string | undefined>,
+  maxPatchCharsPerFile: number = 6000,
+): string {
+  return changedFiles
+    .map((file) => {
+      const header = `### ${file.path}
+Type: ${file.changeType}
+Stats: +${file.additions}/-${file.deletions}
+SHA: ${file.sha}`;
+
+      const patch = patches?.get(file.path);
+
+      if (!patch?.trim()) {
+        return `${header}
+
+Patch: unavailable (GitHub omitted the diff, typically because the file is binary or the patch is too large).`;
+      }
+
+      const sanitizedPatch = sanitizeContent(patch);
+      const truncatedPatch =
+        sanitizedPatch.length > maxPatchCharsPerFile
+          ? `${sanitizedPatch.slice(0, maxPatchCharsPerFile)}
+[... diff truncated after ${maxPatchCharsPerFile} characters ...]`
+          : sanitizedPatch;
+
+      return `${header}
+
+\`\`\`diff
+${truncatedPatch}
+\`\`\``;
+    })
+    .join("\n\n");
+}

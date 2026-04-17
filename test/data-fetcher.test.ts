@@ -4,6 +4,7 @@ import {
   extractOriginalTitle,
   extractOriginalBody,
   fetchGitHubData,
+  fetchPullRequestPatches,
   filterCommentsToTriggerTime,
   filterReviewsToTriggerTime,
   isBodySafeToUse,
@@ -599,6 +600,52 @@ describe("isBodySafeToUse", () => {
 });
 
 describe("fetchGitHubData integration with time filtering", () => {
+  it("should not fetch PR patches from fetchGitHubData", async () => {
+    const listFiles = jest.fn().mockResolvedValue({ data: [] });
+    const mockOctokits = {
+      graphql: jest.fn().mockResolvedValue({
+        repository: {
+          pullRequest: {
+            number: 321,
+            title: "Test PR",
+            body: "PR body",
+            author: { login: "author" },
+            comments: { nodes: [] },
+            files: {
+              nodes: [
+                {
+                  path: "src/auth.ts",
+                  additions: 1,
+                  deletions: 1,
+                  changeType: "MODIFIED",
+                },
+              ],
+            },
+            reviews: { nodes: [] },
+          },
+        },
+      }),
+      rest: {
+        pulls: {
+          listFiles,
+        },
+      },
+    };
+
+    const result = await fetchGitHubData({
+      octokits: mockOctokits as any,
+      repository: "test-owner/test-repo",
+      prNumber: "321",
+      isPR: true,
+    });
+
+    // Patches are now fetched separately (see fetchPullRequestPatches tests).
+    expect(listFiles).not.toHaveBeenCalled();
+    expect(result.changedFilesWithSHA).toHaveLength(1);
+    expect(result.changedFilesWithSHA[0]?.path).toBe("src/auth.ts");
+    expect(result.changedFilesWithSHA[0]).not.toHaveProperty("patch");
+  });
+
   it("should filter comments based on trigger time when provided", async () => {
     const mockOctokits = {
       graphql: jest.fn().mockResolvedValue({
@@ -1428,5 +1475,55 @@ describe("filterCommentsByActor", () => {
     const { filterCommentsByActor } = require("../src/github/data/fetcher");
     const filtered = filterCommentsByActor(comments, "user1", "");
     expect(filtered).toHaveLength(0);
+  });
+});
+
+describe("fetchPullRequestPatches", () => {
+  it("returns a Map keyed by filename with GitHub's patch values", async () => {
+    const listFiles = jest.fn().mockResolvedValue({
+      data: [
+        { filename: "a.ts", patch: "@@ -1 +1 @@\n-old\n+new" },
+        { filename: "b.ts", patch: null },
+      ],
+    });
+    const mockOctokits = {
+      rest: { pulls: { listFiles } },
+    };
+
+    const result = await fetchPullRequestPatches({
+      octokits: mockOctokits as any,
+      owner: "owner",
+      repo: "repo",
+      prNumber: "42",
+    });
+
+    expect(listFiles).toHaveBeenCalledWith({
+      owner: "owner",
+      repo: "repo",
+      pull_number: 42,
+      per_page: 100,
+    });
+    expect(result.get("a.ts")).toContain("+new");
+    expect(result.get("b.ts")).toBeUndefined();
+    expect(result.size).toBe(2);
+  });
+
+  it("returns an empty Map when listFiles fails", async () => {
+    const mockOctokits = {
+      rest: {
+        pulls: {
+          listFiles: jest.fn().mockRejectedValue(new Error("boom")),
+        },
+      },
+    };
+
+    const result = await fetchPullRequestPatches({
+      octokits: mockOctokits as any,
+      owner: "owner",
+      repo: "repo",
+      prNumber: "42",
+    });
+
+    expect(result.size).toBe(0);
   });
 });

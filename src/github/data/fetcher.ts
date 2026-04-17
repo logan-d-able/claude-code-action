@@ -253,6 +253,34 @@ export type FetchDataResult = {
   triggerDisplayName?: string | null;
 };
 
+export async function fetchPullRequestPatches(params: {
+  octokits: Octokits;
+  owner: string;
+  repo: string;
+  prNumber: string;
+}): Promise<Map<string, string | undefined>> {
+  const { octokits, owner, repo, prNumber } = params;
+
+  try {
+    const result = await octokits.rest.pulls.listFiles({
+      owner,
+      repo,
+      pull_number: parseInt(prNumber),
+      per_page: 100,
+    });
+
+    return new Map(
+      result.data.map((file) => [file.filename, file.patch ?? undefined]),
+    );
+  } catch (error) {
+    console.warn(
+      `Failed to fetch PR patches for #${prNumber}; proceeding without inline diff context:`,
+      error,
+    );
+    return new Map();
+  }
+}
+
 export async function fetchGitHubData({
   octokits,
   repository,
