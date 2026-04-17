@@ -28,7 +28,7 @@ import {
   formatContext,
   formatReviewComments,
 } from "../../github/data/formatter";
-import { buildTagModeClaudeArgs } from "../tag/build-claude-args";
+import { prepareMcpConfig } from "../../mcp/install-mcp-server";
 import type { PrepareTagResult } from "../tag";
 import { DEFAULT_REVIEW_AGENTS } from "./agents";
 import type { ReviewAgent } from "./agents";
@@ -79,11 +79,33 @@ export function buildSubAgentClaudeArgs(
 }
 
 /**
- * Build the `claudeArgs` for the synthesis agent. Reuses the tag-mode builder
- * with the synthesis comment id swapped in, so synthesis has the same write
- * capabilities (MCP comment update, inline comments, file ops) that the
- * single-pass tag-mode review would have had — just targeting a different
- * comment.
+ * Synthesis agent tool allowlist. Intentionally minimal and fixed:
+ *
+ *   - read-only filesystem tools (Glob/Grep/LS/Read) so synthesis can verify
+ *     findings against the source tree
+ *   - exactly two MCP write tools targeting the synthesis comment and inline
+ *     review comments on this PR
+ *
+ * Synthesis does NOT inherit tag mode's git CLI (`git add/commit/rm`,
+ * git-push wrapper) or `mcp__github_file_ops__*`. Those capabilities would
+ * let a prompt-injected PR (via worker findings threaded into synthesis's
+ * system prompt) push arbitrary commits. Synthesis also does not forward the
+ * user's `CLAUDE_ARGS` MCP tools — it is an internal sub-agent with a narrow
+ * remit, not a user-facing Claude invocation.
+ */
+const SYNTHESIS_TOOLS: ReadonlyArray<string> = [
+  "Glob",
+  "Grep",
+  "LS",
+  "Read",
+  "mcp__github_comment__update_claude_comment",
+  "mcp__github_inline_comment__create_inline_comment",
+];
+
+/**
+ * Build the `claudeArgs` for the synthesis agent. Constructs its own MCP
+ * config with the synthesis comment id rebound, and emits exactly the tools
+ * in `SYNTHESIS_TOOLS` — no tag-mode inheritance, no git CLI, no file ops.
  */
 async function buildSynthesisClaudeArgs(params: {
   githubToken: string;
@@ -91,17 +113,26 @@ async function buildSynthesisClaudeArgs(params: {
   synthesisCommentId: number;
   branchInfo: PrepareTagResult["branchInfo"];
 }): Promise<string> {
-  const { claudeArgs } = await buildTagModeClaudeArgs({
-    context: params.context,
-    githubToken: params.githubToken,
-    branchInfo: params.branchInfo,
-    claudeCommentId: params.synthesisCommentId.toString(),
-    // Tag mode never posts inline review comments, but synthesis needs this
-    // tool (AND the corresponding MCP server, which `prepareMcpConfig` only
-    // loads when the tool is in the allowlist — see install-mcp-server.ts).
-    extraTools: ["mcp__github_inline_comment__create_inline_comment"],
+  const { context, githubToken, synthesisCommentId, branchInfo } = params;
+
+  const mcpConfig = await prepareMcpConfig({
+    githubToken,
+    owner: context.repository.owner,
+    repo: context.repository.repo,
+    branch: branchInfo.claudeBranch || branchInfo.currentBranch,
+    baseBranch: branchInfo.baseBranch,
+    claudeCommentId: synthesisCommentId.toString(),
+    allowedTools: Array.from(SYNTHESIS_TOOLS),
+    mode: "tag",
+    context,
   });
-  return claudeArgs;
+
+  const escapedConfig = mcpConfig.replace(/'/g, "'\\''");
+  return (
+    `--mcp-config '${escapedConfig}'` +
+    ` --permission-mode acceptEdits` +
+    ` --allowedTools "${SYNTHESIS_TOOLS.join(",")}"`
+  );
 }
 
 function executionFilePath(suffix: string): string {

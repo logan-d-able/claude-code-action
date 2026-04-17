@@ -457,6 +457,82 @@ describe("runMultiAgentReview", () => {
     expect(synthesisPrepareCall).toBeDefined();
   });
 
+  it("synthesis claudeArgs never include git CLI, file_ops, CI tools, or user CLAUDE_ARGS", async () => {
+    // Prompt-injection defense: worker findings are threaded into synthesis's
+    // appendSystemPrompt verbatim. If synthesis inherited git write tools,
+    // malicious PR content could coerce arbitrary commits. Enforce at the
+    // tool-allowlist level.
+    const originalClaudeArgs = process.env.CLAUDE_ARGS;
+    process.env.CLAUDE_ARGS = '--model "claude-opus-4-7"';
+    try {
+      runClaudeImpl = async (_promptPath, options) => {
+        if (options.executionFilePath?.includes("synthesis")) {
+          return { conclusion: "success" };
+        }
+        return {
+          conclusion: "success",
+          structuredOutput: JSON.stringify({
+            agent_id: inferAgentIdFromExecPath(options.executionFilePath),
+            agent_name: "Agent",
+            summary: "ok",
+            findings: [],
+          }),
+        };
+      };
+
+      const { octokit } = makeOctokit();
+      const { runMultiAgentReview } = await import(
+        "../../../src/modes/review/orchestrator"
+      );
+      await runMultiAgentReview({
+        context: makeContext(),
+        octokit,
+        githubToken: "token",
+        prepareResult: PREPARE_RESULT,
+      });
+
+      const synthesisCall = runClaudeCalls.find((c) =>
+        c.options.executionFilePath?.includes("synthesis"),
+      );
+      expect(synthesisCall).toBeDefined();
+      const args = synthesisCall!.options.claudeArgs ?? "";
+
+      // No git CLI — synthesis must never be able to stage, commit, or push.
+      expect(args).not.toContain("Bash(git add");
+      expect(args).not.toContain("Bash(git commit");
+      expect(args).not.toContain("Bash(git rm");
+      expect(args).not.toContain("git-push.sh");
+      // No file-ops MCP — blocks the API-signing commit path too.
+      expect(args).not.toContain("mcp__github_file_ops");
+      // CI introspection tools aren't relevant to synthesis; keep surface small.
+      expect(args).not.toContain("mcp__github_ci__");
+      // User's CLAUDE_ARGS must not be appended — synthesis is an internal
+      // sub-agent, not a user-facing Claude invocation.
+      expect(args).not.toContain('--model "claude-opus-4-7"');
+
+      // Verify the allowlist is exactly the synthesis minimum (6 tools).
+      const match = args.match(/--allowedTools "([^"]+)"/);
+      expect(match).not.toBeNull();
+      const tools = match![1]!.split(",").sort();
+      expect(tools).toEqual(
+        [
+          "Glob",
+          "Grep",
+          "LS",
+          "Read",
+          "mcp__github_comment__update_claude_comment",
+          "mcp__github_inline_comment__create_inline_comment",
+        ].sort(),
+      );
+    } finally {
+      if (originalClaudeArgs === undefined) {
+        delete process.env.CLAUDE_ARGS;
+      } else {
+        process.env.CLAUDE_ARGS = originalClaudeArgs;
+      }
+    }
+  });
+
   it("never reads prepareResult.commentId (tag-mode tracking comment invariant)", async () => {
     const trapPrepareResult = {
       ...PREPARE_RESULT,
