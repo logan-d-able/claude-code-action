@@ -210,10 +210,13 @@ async function run() {
     console.log(
       `Preparing with mode: ${modeName} for event: ${context.eventName}`,
     );
-    const prepareResult =
+    const tagPrepareResult =
       modeName === "tag"
         ? await prepareTagMode({ context, octokit, githubToken })
-        : await prepareAgentMode({ context, octokit, githubToken });
+        : undefined;
+    const prepareResult =
+      tagPrepareResult ??
+      (await prepareAgentMode({ context, octokit, githubToken }));
 
     commentId = prepareResult.commentId;
     claudeBranch = prepareResult.branchInfo.claudeBranch;
@@ -267,22 +270,19 @@ async function run() {
     // prepare step above has already created the tracking comment and branch.
     // We only redirect the *execution* step — finally-block cleanup and
     // updateCommentLink still run identically to upstream tag mode.
-    const shouldMultiAgent =
-      modeName === "tag" &&
+    let claudeResult: ClaudeRunResult;
+    if (
+      tagPrepareResult &&
       context.inputs.multiAgentReview === "true" &&
       isEntityContext(context) &&
       context.isPR &&
-      isPullRequestEvent(context);
-
-    let claudeResult: ClaudeRunResult;
-    if (shouldMultiAgent && isEntityContext(context)) {
+      isPullRequestEvent(context)
+    ) {
       claudeResult = await runMultiAgentReview({
         context,
         octokit,
         githubToken,
-        prepareResult: prepareResult as Parameters<
-          typeof runMultiAgentReview
-        >[0]["prepareResult"],
+        prepareResult: tagPrepareResult,
       });
     } else {
       const promptFile =

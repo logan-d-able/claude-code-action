@@ -15,13 +15,13 @@ describe("parseDebateRounds", () => {
   it("parses numeric strings", () => {
     expect(parseDebateRounds("0")).toBe(0);
     expect(parseDebateRounds("1")).toBe(1);
-    expect(parseDebateRounds("2")).toBe(2);
-    expect(parseDebateRounds("3")).toBe(3);
   });
 
-  it("clamps above the upper bound", () => {
-    expect(parseDebateRounds("4")).toBe(3);
-    expect(parseDebateRounds("100")).toBe(3);
+  it("clamps above the upper bound (max 1 round)", () => {
+    expect(parseDebateRounds("2")).toBe(1);
+    expect(parseDebateRounds("3")).toBe(1);
+    expect(parseDebateRounds("4")).toBe(1);
+    expect(parseDebateRounds("100")).toBe(1);
   });
 
   it("clamps below the lower bound", () => {

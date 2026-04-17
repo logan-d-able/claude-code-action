@@ -29,6 +29,7 @@ import {
   formatReviewComments,
 } from "../../github/data/formatter";
 import { prepareMcpConfig } from "../../mcp/install-mcp-server";
+import type { PrepareTagResult } from "../tag";
 import { DEFAULT_REVIEW_AGENTS } from "./agents";
 import type { ReviewAgent } from "./agents";
 import {
@@ -49,17 +50,6 @@ import {
   updateSynthesisComment,
 } from "./synthesis-comment";
 
-type PrepareTagResult = {
-  commentId: number;
-  branchInfo: {
-    claudeBranch?: string;
-    baseBranch: string;
-    currentBranch: string;
-  };
-  mcpConfig: string;
-  claudeArgs: string;
-};
-
 export type RunMultiAgentReviewParams = {
   context: ParsedGitHubContext;
   octokit: Octokits;
@@ -69,12 +59,17 @@ export type RunMultiAgentReviewParams = {
 
 const WORKER_ALLOWED_TOOLS = ["Glob", "Grep", "LS", "Read"] as const;
 
-/** Parse `reviewDebateRounds`, guarding against NaN and clamping to [0, 3]. */
+/**
+ * Parse `reviewDebateRounds`, guarding against NaN and clamping to [0, 1].
+ * Only one rebuttal round is currently meaningful: subsequent rounds would
+ * re-debate the same Round 1 findings (the loop does not feed earlier
+ * rebuttals back in), so they produce redundant output with no new signal.
+ */
 export function parseDebateRounds(raw: string | undefined): number {
   if (!raw) return 0;
   const n = Number.parseInt(raw, 10);
   if (!Number.isFinite(n)) return 0;
-  return Math.max(0, Math.min(3, n));
+  return Math.max(0, Math.min(1, n));
 }
 
 /**

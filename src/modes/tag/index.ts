@@ -19,6 +19,22 @@ import type { Octokits } from "../../github/api/client";
 import { parseAllowedTools } from "../agent/parse-tools";
 
 /**
+ * Shape returned by `prepareTagMode`. Exported so additive branches (such as
+ * the multi-agent review orchestrator) can consume it without redeclaring a
+ * structural copy that may silently drift from this signature.
+ */
+export type PrepareTagResult = {
+  commentId: number;
+  branchInfo: {
+    claudeBranch?: string;
+    baseBranch: string;
+    currentBranch: string;
+  };
+  mcpConfig: string;
+  claudeArgs: string;
+};
+
+/**
  * Prepares the tag mode execution context.
  *
  * Tag mode responds to @claude mentions, issue assignments, or labels.
@@ -32,7 +48,7 @@ export async function prepareTagMode({
   context: GitHubContext;
   octokit: Octokits;
   githubToken: string;
-}) {
+}): Promise<PrepareTagResult> {
   // Tag mode only handles entity-based events
   if (!isEntityContext(context)) {
     throw new Error("Tag mode requires entity context");
