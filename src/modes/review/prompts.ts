@@ -51,21 +51,36 @@ const PARENT_PROMPT_NOTICE = [
   "to the parent workflow, not to you.",
 ].join(" ");
 
-type ReviewRole = "review" | "debate" | "synthesis";
-
-export type BuildSubAgentSystemPromptParams = {
-  role: ReviewRole;
-  agent?: ReviewAgent;
+type BaseParams = {
   githubContextMarkdown: string;
   extraSections?: string[];
-  debateRoundNumber?: number;
-  ownFindings?: AgentFindings;
-  otherFindings?: AgentFindings[];
+};
+
+type ReviewParams = BaseParams & {
+  role: "review";
+  agent: ReviewAgent;
+};
+
+type DebateParams = BaseParams & {
+  role: "debate";
+  agent: ReviewAgent;
+  debateRoundNumber: number;
+  ownFindings: AgentFindings;
+  otherFindings: AgentFindings[];
   priorRoundRebuttals?: AgentRebuttal[];
+};
+
+type SynthesisParams = BaseParams & {
+  role: "synthesis";
   allFindings?: AgentFindings[];
   allRebuttals?: AgentRebuttal[];
   synthesisCommentId?: number;
 };
+
+export type BuildSubAgentSystemPromptParams =
+  | ReviewParams
+  | DebateParams
+  | SynthesisParams;
 
 export function buildSubAgentSystemPrompt(
   params: BuildSubAgentSystemPromptParams,
@@ -73,8 +88,7 @@ export function buildSubAgentSystemPrompt(
   const header = buildRoleHeader(params);
   const sections: string[] = [header, PARENT_PROMPT_NOTICE];
 
-  const roleSection = buildRoleSection(params);
-  if (roleSection) sections.push(roleSection);
+  sections.push(buildRoleSection(params));
 
   sections.push(`## PR context\n\n${params.githubContextMarkdown}`);
 
@@ -90,42 +104,31 @@ export function buildSubAgentSystemPrompt(
 }
 
 function buildRoleHeader(params: BuildSubAgentSystemPromptParams): string {
-  const { role, agent, debateRoundNumber } = params;
-  if (role === "synthesis") {
+  if (params.role === "synthesis") {
     return "You are operating as the `synthesis` sub-agent within a multi-agent PR review workflow.";
   }
-  if (!agent) {
-    throw new Error(
-      `buildSubAgentSystemPrompt: role "${role}" requires an agent`,
-    );
+  if (params.role === "debate") {
+    return `You are operating as the \`${params.agent.id}\` sub-agent within a multi-agent PR review workflow (debate round ${params.debateRoundNumber}).`;
   }
-  if (role === "debate") {
-    return `You are operating as the \`${agent.id}\` sub-agent within a multi-agent PR review workflow (debate round ${debateRoundNumber ?? "?"}).`;
-  }
-  return `You are operating as the \`${agent.id}\` sub-agent within a multi-agent PR review workflow.`;
+  return `You are operating as the \`${params.agent.id}\` sub-agent within a multi-agent PR review workflow.`;
 }
 
 function buildRoleSection(params: BuildSubAgentSystemPromptParams): string {
-  const { role, agent } = params;
-
-  if (role === "review") {
-    return `## Your custom sub-agent role\n\n${agent!.perspective}`;
+  if (params.role === "review") {
+    return `## Your custom sub-agent role\n\n${params.agent.perspective}`;
   }
 
-  if (role === "debate") {
-    const own = params.ownFindings
-      ? `\n\n### Your original findings\n\n\`\`\`json\n${JSON.stringify(params.ownFindings, null, 2)}\n\`\`\``
-      : "";
-    const others = params.otherFindings?.length
+  if (params.role === "debate") {
+    const own = `\n\n### Your original findings\n\n\`\`\`json\n${JSON.stringify(params.ownFindings, null, 2)}\n\`\`\``;
+    const others = params.otherFindings.length
       ? `\n\n### Other reviewers' findings\n\n${renderFindingsForDebate(params.otherFindings)}`
       : "";
     const prior = params.priorRoundRebuttals?.length
       ? `\n\n### Prior debate rounds\n\n${renderRebuttals(params.priorRoundRebuttals)}`
       : "";
-    return `## Your custom sub-agent role\n\n${agent!.perspective}${own}${others}${prior}`;
+    return `## Your custom sub-agent role\n\n${params.agent.perspective}${own}${others}${prior}`;
   }
 
-  // synthesis
   const findings = params.allFindings?.length
     ? `\n\n### Reviewer findings\n\n${renderFindingsForDebate(params.allFindings)}`
     : "";
@@ -136,26 +139,24 @@ function buildRoleSection(params: BuildSubAgentSystemPromptParams): string {
 }
 
 function buildOutputSection(params: BuildSubAgentSystemPromptParams): string {
-  const { role, agent } = params;
-
-  if (role === "review") {
+  if (params.role === "review") {
     return [
       "## Required output",
       "",
       "Return a single JSON object conforming to the --json-schema provided on the command line.",
-      `Set \`agent_id="${agent!.id}"\` and \`agent_name="${agent!.name}"\`.`,
+      `Set \`agent_id="${params.agent.id}"\` and \`agent_name="${params.agent.name}"\`.`,
       "Do not call any tool that writes to GitHub — your only output is the JSON payload.",
       'Severity choices: "critical" (blocks merge), "major" (should fix before merge), "minor" (nice to fix), "nit" (subjective).',
       "If you find no issues, return an empty findings array with a short summary explaining what you checked.",
     ].join("\n");
   }
 
-  if (role === "debate") {
+  if (params.role === "debate") {
     return [
       "## Required output",
       "",
       "Return a single JSON object conforming to the --json-schema provided on the command line.",
-      `Set \`agent_id="${agent!.id}"\` and \`agent_name="${agent!.name}"\`.`,
+      `Set \`agent_id="${params.agent.id}"\` and \`agent_name="${params.agent.name}"\`.`,
       "For each finding from another reviewer, decide: agree, disagree, or partial, and give concise reasoning.",
       "Do NOT re-introduce your own findings — focus on peers'. You may skip findings entirely outside your perspective.",
       "Do not call any tool that writes to GitHub.",
