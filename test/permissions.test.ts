@@ -78,6 +78,8 @@ describe("checkWritePermissions", () => {
       includeFixLinks: true,
       includeCommentsByActor: "",
       excludeCommentsByActor: "",
+      multiAgentReview: "false",
+      reviewDebateRounds: "0",
     },
   });
 

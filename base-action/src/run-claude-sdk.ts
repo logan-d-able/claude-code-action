@@ -16,7 +16,7 @@ export type ClaudeRunResult = {
   structuredOutput?: string;
 };
 
-const EXECUTION_FILE = `${process.env.RUNNER_TEMP}/claude-execution-output.json`;
+const DEFAULT_EXECUTION_FILE = `${process.env.RUNNER_TEMP}/claude-execution-output.json`;
 
 /** Filename for the user request file, written by prompt generation */
 const USER_REQUEST_FILENAME = "claude-user-request.txt";
@@ -135,8 +135,14 @@ function sanitizeSdkOutput(
  */
 export async function runClaudeWithSdk(
   promptPath: string,
-  { sdkOptions, showFullOutput, hasJsonSchema }: ParsedSdkOptions,
+  {
+    sdkOptions,
+    showFullOutput,
+    hasJsonSchema,
+    executionFilePath,
+  }: ParsedSdkOptions,
 ): Promise<ClaudeRunResult> {
+  const executionFile = executionFilePath ?? DEFAULT_EXECUTION_FILE;
   // Create prompt configuration - may be a string or multi-block message
   const prompt = await createPromptConfig(promptPath, showFullOutput);
 
@@ -181,9 +187,9 @@ export async function runClaudeWithSdk(
 
   // Write execution file
   try {
-    await writeFile(EXECUTION_FILE, JSON.stringify(messages, null, 2));
-    console.log(`Log saved to ${EXECUTION_FILE}`);
-    result.executionFile = EXECUTION_FILE;
+    await writeFile(executionFile, JSON.stringify(messages, null, 2));
+    console.log(`Log saved to ${executionFile}`);
+    result.executionFile = executionFile;
   } catch (error) {
     core.warning(`Failed to write execution file: ${error}`);
   }

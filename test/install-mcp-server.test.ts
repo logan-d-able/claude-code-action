@@ -43,6 +43,8 @@ describe("prepareMcpConfig", () => {
       includeFixLinks: true,
       includeCommentsByActor: "",
       excludeCommentsByActor: "",
+      multiAgentReview: "false",
+      reviewDebateRounds: "0",
     },
   };
 
