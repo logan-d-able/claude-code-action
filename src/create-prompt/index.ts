@@ -28,6 +28,11 @@ const GIT_PUSH_WRAPPER = `${process.env.GITHUB_ACTION_PATH}/scripts/git-push.sh`
 /** Filename for the user request file, read by the SDK runner */
 const USER_REQUEST_FILENAME = "claude-user-request.txt";
 
+export type CreatePromptResult = {
+  promptFilePath: string;
+  userRequestFilePath?: string;
+};
+
 // Tag mode defaults - these tools are needed for tag mode to function.
 // Edit/MultiEdit/Write are intentionally omitted: acceptEdits permission mode
 // auto-allows file edits inside $GITHUB_WORKSPACE and denies writes outside it.
@@ -920,7 +925,7 @@ export async function createPrompt(
   claudeBranch: string | undefined,
   githubData: FetchDataResult,
   context: ParsedGitHubContext,
-) {
+): Promise<CreatePromptResult> {
   try {
     const claudeCommentId = commentId.toString();
 
@@ -948,11 +953,10 @@ export async function createPrompt(
     console.log(promptContent);
     console.log("=======================");
 
+    const promptFilePath = `${process.env.RUNNER_TEMP || "/tmp"}/claude-prompts/claude-prompt.txt`;
+
     // Write the prompt file
-    await writeFile(
-      `${process.env.RUNNER_TEMP || "/tmp"}/claude-prompts/claude-prompt.txt`,
-      promptContent,
-    );
+    await writeFile(promptFilePath, promptContent);
 
     // Extract and write the user request separately for SDK multi-block messaging
     // This allows the CLI to process slash commands (e.g., "@claude /review-pr")
@@ -960,11 +964,10 @@ export async function createPrompt(
       preparedContext,
       githubData,
     );
+    let userRequestFilePath: string | undefined;
     if (userRequest) {
-      await writeFile(
-        `${process.env.RUNNER_TEMP || "/tmp"}/claude-prompts/${USER_REQUEST_FILENAME}`,
-        userRequest,
-      );
+      userRequestFilePath = `${process.env.RUNNER_TEMP || "/tmp"}/claude-prompts/${USER_REQUEST_FILENAME}`;
+      await writeFile(userRequestFilePath, userRequest);
       console.log("===== USER REQUEST =====");
       console.log(userRequest);
       console.log("========================");
@@ -984,6 +987,11 @@ export async function createPrompt(
 
     core.exportVariable("ALLOWED_TOOLS", allAllowedTools);
     core.exportVariable("DISALLOWED_TOOLS", allDisallowedTools);
+
+    return {
+      promptFilePath,
+      ...(userRequestFilePath ? { userRequestFilePath } : {}),
+    };
   } catch (error) {
     core.setFailed(`Create prompt failed with error: ${error}`);
     process.exit(1);
