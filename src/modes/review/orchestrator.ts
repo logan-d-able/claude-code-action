@@ -74,7 +74,7 @@ export function buildSubAgentClaudeArgs(
   schema: unknown,
 ): string {
   const toolList = tools.join(",");
-  const schemaJson = JSON.stringify(schema);
+  const schemaJson = JSON.stringify(schema).replace(/'/g, "'\\''");
   return `--permission-mode acceptEdits --allowedTools "${toolList}" --json-schema '${schemaJson}'`;
 }
 

@@ -86,6 +86,16 @@ describe("buildSubAgentClaudeArgs", () => {
     );
     expect(customArgs).toContain('--allowedTools "Glob,Read"');
   });
+
+  it("escapes embedded single quotes in the schema JSON to match buildSynthesisClaudeArgs", () => {
+    const schemaWithQuote = {
+      type: "object",
+      description: "don't break the quoting",
+    };
+    const escapedArgs = buildSubAgentClaudeArgs(["Read"], schemaWithQuote);
+    expect(escapedArgs).toContain("don'\\''t break the quoting");
+    expect(escapedArgs).not.toContain("don't break the quoting");
+  });
 });
 
 describe("buildSubAgentSystemPrompt", () => {
