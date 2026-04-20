@@ -190,6 +190,26 @@ describe("buildSubAgentSystemPrompt", () => {
     ).not.toThrow();
   });
 
+  it("mandates inline-comment coverage and persona-tagged body template", () => {
+    // Inline comments were previously inconsistent — synthesis skipped some
+    // findings because the instruction was too soft ("targeted message"). The
+    // prompt now requires one inline per file+line finding AND a persona tag,
+    // so PR authors can trace each inline back to the reviewer that raised it.
+    const prompt = buildSubAgentSystemPrompt({
+      role: "synthesis",
+      githubContextMarkdown: "ctx",
+      synthesisCommentId: 1,
+    });
+    // Mandatory coverage language.
+    expect(prompt).toContain("EVERY consolidated finding");
+    expect(prompt).toContain("MUST call");
+    // Persona tag template — single reviewer and consensus cases.
+    expect(prompt).toContain("**[<Agent Name>]**");
+    expect(prompt).toContain("**[Consensus]**");
+    // Worked example uses Security Reviewer to make the pattern concrete.
+    expect(prompt).toContain("**[Security Reviewer]**");
+  });
+
   it("sanitizes findings before embedding them in synthesis prompt", () => {
     const prompt = buildSubAgentSystemPrompt({
       role: "synthesis",
