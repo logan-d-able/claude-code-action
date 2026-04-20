@@ -96,6 +96,21 @@ describe("buildSubAgentClaudeArgs", () => {
     expect(escapedArgs).toContain("don'\\''t break the quoting");
     expect(escapedArgs).not.toContain("don't break the quoting");
   });
+
+  it("rejects tool names containing shell metacharacters", () => {
+    expect(() =>
+      buildSubAgentClaudeArgs(["Read$(whoami)"], AGENT_FINDINGS_SCHEMA),
+    ).toThrow(/Invalid tool name/);
+    expect(() =>
+      buildSubAgentClaudeArgs(["Read;rm -rf /"], AGENT_FINDINGS_SCHEMA),
+    ).toThrow(/Invalid tool name/);
+    expect(() =>
+      buildSubAgentClaudeArgs(['Read"break'], AGENT_FINDINGS_SCHEMA),
+    ).toThrow(/Invalid tool name/);
+    expect(() =>
+      buildSubAgentClaudeArgs(["Read`whoami`"], AGENT_FINDINGS_SCHEMA),
+    ).toThrow(/Invalid tool name/);
+  });
 });
 
 describe("buildSubAgentSystemPrompt", () => {
@@ -170,6 +185,7 @@ describe("buildSubAgentSystemPrompt", () => {
       buildSubAgentSystemPrompt({
         role: "synthesis",
         githubContextMarkdown: "ctx",
+        synthesisCommentId: 1,
       }),
     ).not.toThrow();
   });
@@ -178,6 +194,7 @@ describe("buildSubAgentSystemPrompt", () => {
     const prompt = buildSubAgentSystemPrompt({
       role: "synthesis",
       githubContextMarkdown: "ctx",
+      synthesisCommentId: 1,
       allFindings: [
         {
           agent_id: "a1",
@@ -206,6 +223,7 @@ describe("buildSubAgentSystemPrompt", () => {
     const prompt = buildSubAgentSystemPrompt({
       role: "synthesis",
       githubContextMarkdown: "ctx",
+      synthesisCommentId: 1,
       allRebuttals: [
         {
           agent_id: "a1",
@@ -246,6 +264,7 @@ describe("buildSubAgentSystemPrompt", () => {
     const prompt = buildSubAgentSystemPrompt({
       role: "synthesis",
       githubContextMarkdown: "ctx",
+      synthesisCommentId: 1,
       allFindings: [
         {
           agent_id: "a1",

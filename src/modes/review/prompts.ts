@@ -77,7 +77,7 @@ type SynthesisParams = BaseParams & {
   role: "synthesis";
   allFindings?: AgentFindings[];
   allRebuttals?: AgentRebuttal[];
-  synthesisCommentId?: number;
+  synthesisCommentId: number;
 };
 
 export type BuildSubAgentSystemPromptParams =
@@ -168,9 +168,7 @@ function buildOutputSection(params: BuildSubAgentSystemPromptParams): string {
   }
 
   const markerLine = `\`${SYNTHESIS_COMMENT_MARKER}\``;
-  const commentIdLine = params.synthesisCommentId
-    ? `The target comment id is ${params.synthesisCommentId}; it is already wired via MCP — do not change it.`
-    : "The target comment id is already wired via MCP — do not change it.";
+  const commentIdLine = `The target comment id is ${params.synthesisCommentId}; it is already wired via MCP — do not change it.`;
 
   return [
     "## Required output",

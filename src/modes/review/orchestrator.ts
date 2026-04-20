@@ -69,10 +69,17 @@ export function parseDebateRounds(raw: string | undefined): number {
  * files, post comments, or touch git history. Schema is passed to enforce
  * structured JSON output.
  */
+const TOOL_NAME_PATTERN = /^[A-Za-z0-9_:()*-]+$/;
+
 export function buildSubAgentClaudeArgs(
   tools: ReadonlyArray<string>,
   schema: unknown,
 ): string {
+  for (const tool of tools) {
+    if (!TOOL_NAME_PATTERN.test(tool)) {
+      throw new Error(`Invalid tool name: ${JSON.stringify(tool)}`);
+    }
+  }
   const toolList = tools.join(",");
   const schemaJson = JSON.stringify(schema).replace(/'/g, "'\\''");
   return `--permission-mode acceptEdits --allowedTools "${toolList}" --json-schema '${schemaJson}'`;

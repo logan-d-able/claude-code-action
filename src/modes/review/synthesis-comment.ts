@@ -9,6 +9,7 @@
 
 import type { Octokits } from "../../github/api/client";
 import type { ParsedGitHubContext } from "../../github/context";
+import { retryWithBackoff } from "../../utils/retry";
 import { SYNTHESIS_COMMENT_MARKER } from "./prompts";
 import { sanitizeFindings } from "./sanitize";
 import type { AgentFindings } from "./schemas";
@@ -20,12 +21,14 @@ export async function createSynthesisComment(params: {
 }): Promise<number> {
   const { octokit, context, agentCount } = params;
   const body = `${SYNTHESIS_COMMENT_MARKER}\n\n⏳ Running ${agentCount} reviewer agent${agentCount === 1 ? "" : "s"}...`;
-  const response = await octokit.rest.issues.createComment({
-    owner: context.repository.owner,
-    repo: context.repository.repo,
-    issue_number: context.entityNumber,
-    body,
-  });
+  const response = await retryWithBackoff(() =>
+    octokit.rest.issues.createComment({
+      owner: context.repository.owner,
+      repo: context.repository.repo,
+      issue_number: context.entityNumber,
+      body,
+    }),
+  );
   return response.data.id;
 }
 
@@ -39,12 +42,14 @@ export async function updateSynthesisComment(params: {
   const normalized = body.startsWith(SYNTHESIS_COMMENT_MARKER)
     ? body
     : `${SYNTHESIS_COMMENT_MARKER}\n\n${body}`;
-  await octokit.rest.issues.updateComment({
-    owner: context.repository.owner,
-    repo: context.repository.repo,
-    comment_id: commentId,
-    body: normalized,
-  });
+  await retryWithBackoff(() =>
+    octokit.rest.issues.updateComment({
+      owner: context.repository.owner,
+      repo: context.repository.repo,
+      comment_id: commentId,
+      body: normalized,
+    }),
+  );
 }
 
 /**
