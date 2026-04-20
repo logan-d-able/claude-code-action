@@ -77,6 +77,7 @@ export type TriageDecision = {
 export const TRIAGE_SCHEMA = {
   type: "object",
   required: ["decision", "reason"],
+  additionalProperties: false,
   properties: {
     decision: {
       type: "string",

@@ -21,6 +21,7 @@
 
 import { runClaude } from "../../../base-action/src/run-claude";
 import type { ParsedGitHubContext } from "../../github/context";
+import { sanitizeContent } from "../../github/utils/sanitizer";
 import { retryWithBackoff } from "../../utils/retry";
 import type { RetryOptions } from "../../utils/retry";
 import { buildSubAgentClaudeArgs } from "./orchestrator";
@@ -71,11 +72,21 @@ export async function runTriageAgent(
           `Triage returned no structured output (conclusion: ${result.conclusion})`,
         );
       }
-      return validateStructuredOutput<TriageDecision>(
+      const parsed = validateStructuredOutput<TriageDecision>(
         result.structuredOutput,
         ["decision", "reason"],
         "Triage",
       );
+      // `validateStructuredOutput` only asserts required-field presence, not
+      // enum membership. A hallucinated decision value would pass through the
+      // `TriageDecision` type cast and lie to downstream routing logic — throw
+      // here so the retry + catch converts it to the safe single fallback.
+      if (parsed.decision !== "single" && parsed.decision !== "multi") {
+        throw new Error(
+          `Triage: decision "${parsed.decision}" is not "single" or "multi"`,
+        );
+      }
+      return parsed;
     }, TRIAGE_RETRY_OPTIONS);
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
@@ -91,8 +102,13 @@ export async function runTriageAgent(
  * embedding in the synthesis comment body.
  */
 export function formatTriageLine(decision: TriageDecision): string {
-  // Reason is enforced <= 500 chars by the schema, but guard anyway in case a
-  // fallback path constructs a decision without going through the schema.
-  const reason = decision.reason.slice(0, 500).replace(/\s+/g, " ").trim();
+  // The reason is embedded verbatim into a GitHub comment body, so run it
+  // through the shared sanitizer (markdown/HTML stripping) before the
+  // 500-char cap and whitespace collapse. The schema caps length to 500, but
+  // fallback paths (`triage failed: ...`) bypass the schema.
+  const reason = sanitizeContent(decision.reason)
+    .slice(0, 500)
+    .replace(/\s+/g, " ")
+    .trim();
   return `🔀 Triage: ${decision.decision} — ${reason}`;
 }

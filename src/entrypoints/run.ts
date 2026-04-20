@@ -283,60 +283,83 @@ async function run() {
       context.isPR &&
       isPullRequestEvent(context);
     const multiAgentInput = context.inputs.multiAgentReview;
-    const forcedMulti = multiAgentEligible && multiAgentInput === "true";
-    const autoMulti = multiAgentEligible && multiAgentInput === "auto";
 
     let claudeResult: ClaudeRunResult;
-    if (forcedMulti && tagPrepareResult && isEntityContext(context)) {
+    if (
+      multiAgentEligible &&
+      multiAgentInput === "true" &&
+      tagPrepareResult &&
+      isEntityContext(context)
+    ) {
+      // Forced multi-agent review — uses `prepareResult.promptFilePath`
+      // internally, so we don't need to validate the prompt file here.
       claudeResult = await runMultiAgentReview({
         context,
         octokit,
         githubToken,
         prepareResult: tagPrepareResult,
       });
-    } else if (autoMulti && tagPrepareResult && isEntityContext(context)) {
-      // Auto mode: run a zero-tool triage sub-agent that decides per-PR
-      // whether to spend the full multi-agent pipeline. Context markdown is
-      // built exactly once and reused — `fetchPullRequestPatches` is
-      // rate-limit sensitive and must not run twice.
+    } else {
+      // All remaining paths (auto-triage + standard single) need a validated
+      // prompt file. Resolve once and share between triage and `runClaude`.
       const promptFile =
         process.env.INPUT_PROMPT_FILE ||
         `${process.env.RUNNER_TEMP}/claude-prompts/claude-prompt.txt`;
       const promptConfig = await preparePrompt({ prompt: "", promptFile });
 
-      const githubContextMarkdown = await buildContextMarkdown({
-        context,
-        octokit,
-        prepareResult: tagPrepareResult,
-      });
-      const triageDecision = await runTriageAgent({
-        context,
-        githubContextMarkdown,
-        promptFilePath: promptConfig.path,
-      });
-      const triageLine = formatTriageLine(triageDecision);
-      console.log(
-        `[triage] decision=${triageDecision.decision} reason=${triageDecision.reason}`,
-      );
-
-      if (triageDecision.decision === "multi") {
-        claudeResult = await runMultiAgentReview({
+      if (
+        multiAgentEligible &&
+        multiAgentInput === "auto" &&
+        tagPrepareResult &&
+        isEntityContext(context)
+      ) {
+        // Auto mode: run a zero-tool triage sub-agent that decides per-PR
+        // whether to spend the full multi-agent pipeline. Context markdown is
+        // built exactly once and reused — `fetchPullRequestPatches` is
+        // rate-limit sensitive and must not run twice.
+        const githubContextMarkdown = await buildContextMarkdown({
           context,
           octokit,
-          githubToken,
           prepareResult: tagPrepareResult,
-          preBuiltContextMarkdown: githubContextMarkdown,
-          triageLine,
         });
-      } else {
-        // Single-path under auto: debate rounds are meaningless without
-        // multiple reviewer agents. Warn so operators notice silent drops.
-        if (parseDebateRounds(context.inputs.reviewDebateRounds) > 0) {
-          console.warn(
-            `[triage] review_debate_rounds=${context.inputs.reviewDebateRounds} ignored (triage routed to single-agent)`,
-          );
+        const triageDecision = await runTriageAgent({
+          context,
+          githubContextMarkdown,
+          promptFilePath: promptConfig.path,
+        });
+        const triageLine = formatTriageLine(triageDecision);
+        console.log(
+          `[triage] decision=${triageDecision.decision} reason=${triageDecision.reason}`,
+        );
+
+        if (triageDecision.decision === "multi") {
+          claudeResult = await runMultiAgentReview({
+            context,
+            octokit,
+            githubToken,
+            prepareResult: tagPrepareResult,
+            preBuiltContextMarkdown: githubContextMarkdown,
+            triageLine,
+          });
+        } else {
+          // Single-path under auto: debate rounds are meaningless without
+          // multiple reviewer agents. Warn so operators notice silent drops.
+          if (parseDebateRounds(context.inputs.reviewDebateRounds) > 0) {
+            console.warn(
+              `[triage] review_debate_rounds=${context.inputs.reviewDebateRounds} ignored (triage routed to single-agent)`,
+            );
+          }
+          await postTriageOnlyComment({ octokit, context, triageLine });
+          claudeResult = await runClaude(promptConfig.path, {
+            claudeArgs: prepareResult.claudeArgs,
+            appendSystemPrompt: process.env.APPEND_SYSTEM_PROMPT,
+            model: process.env.ANTHROPIC_MODEL,
+            pathToClaudeCodeExecutable:
+              process.env.INPUT_PATH_TO_CLAUDE_CODE_EXECUTABLE,
+            showFullOutput: process.env.INPUT_SHOW_FULL_OUTPUT,
+          });
         }
-        await postTriageOnlyComment({ octokit, context, triageLine });
+      } else {
         claudeResult = await runClaude(promptConfig.path, {
           claudeArgs: prepareResult.claudeArgs,
           appendSystemPrompt: process.env.APPEND_SYSTEM_PROMPT,
@@ -346,23 +369,6 @@ async function run() {
           showFullOutput: process.env.INPUT_SHOW_FULL_OUTPUT,
         });
       }
-    } else {
-      const promptFile =
-        process.env.INPUT_PROMPT_FILE ||
-        `${process.env.RUNNER_TEMP}/claude-prompts/claude-prompt.txt`;
-      const promptConfig = await preparePrompt({
-        prompt: "",
-        promptFile,
-      });
-
-      claudeResult = await runClaude(promptConfig.path, {
-        claudeArgs: prepareResult.claudeArgs,
-        appendSystemPrompt: process.env.APPEND_SYSTEM_PROMPT,
-        model: process.env.ANTHROPIC_MODEL,
-        pathToClaudeCodeExecutable:
-          process.env.INPUT_PATH_TO_CLAUDE_CODE_EXECUTABLE,
-        showFullOutput: process.env.INPUT_SHOW_FULL_OUTPUT,
-      });
     }
 
     claudeSuccess = claudeResult.conclusion === "success";
