@@ -56,6 +56,19 @@ export type RunMultiAgentReviewParams = {
   octokit: Octokits;
   githubToken: string;
   prepareResult: PrepareTagResult;
+  /**
+   * When provided (e.g. by the auto-triage branch in `run.ts`), skip the
+   * internal `buildContextMarkdown` call and reuse the precomputed markdown —
+   * `fetchPullRequestPatches` is rate-limit sensitive and must not run twice
+   * on the same invocation.
+   */
+  preBuiltContextMarkdown?: string;
+  /**
+   * Optional one-line audit trail (e.g. `"🔀 Triage: multi — reason: …"`)
+   * prepended to the synthesis comment placeholder so the triage decision is
+   * visible on GitHub even before the synthesis agent writes the final body.
+   */
+  triageLine?: string;
 };
 
 /** Parse `reviewDebateRounds`, guarding against NaN and clamping to [0, 3]. */
@@ -179,7 +192,7 @@ const WORKER_RETRY_OPTIONS: RetryOptions = {
   maxDelayMs: 10000,
 };
 
-async function buildContextMarkdown(params: {
+export async function buildContextMarkdown(params: {
   context: ParsedGitHubContext;
   octokit: Octokits;
   prepareResult: PrepareTagResult;
@@ -301,7 +314,14 @@ async function runAgentDebate(params: {
 export async function runMultiAgentReview(
   params: RunMultiAgentReviewParams,
 ): Promise<ClaudeRunResult> {
-  const { context, octokit, githubToken, prepareResult } = params;
+  const {
+    context,
+    octokit,
+    githubToken,
+    prepareResult,
+    preBuiltContextMarkdown,
+    triageLine,
+  } = params;
 
   if (!context.isPR) {
     throw new Error("Multi-agent review requires a pull request context");
@@ -318,11 +338,16 @@ export async function runMultiAgentReview(
   const debateRounds = parseDebateRounds(context.inputs.reviewDebateRounds);
 
   // Reuse the tag-mode fetched GitHub data; do not re-call fetchGitHubData.
-  const githubContextMarkdown = await buildContextMarkdown({
-    context,
-    octokit,
-    prepareResult,
-  });
+  // When called from the auto-triage branch the caller has already built
+  // context markdown for triage — reuse it to avoid a second
+  // `fetchPullRequestPatches` round-trip.
+  const githubContextMarkdown =
+    preBuiltContextMarkdown ??
+    (await buildContextMarkdown({
+      context,
+      octokit,
+      prepareResult,
+    }));
 
   // Pre-create the synthesis comment so we have a stable id to hand to the
   // synthesis agent's MCP server. Failure here is fatal — without this id we
@@ -331,6 +356,7 @@ export async function runMultiAgentReview(
     octokit,
     context,
     agentCount: agents.length,
+    triageLine,
   });
 
   // Round 1: independent reviews in parallel.

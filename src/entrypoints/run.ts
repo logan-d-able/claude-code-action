@@ -26,7 +26,14 @@ import type { GitHubContext } from "../github/context";
 import { detectMode } from "../modes/detector";
 import { prepareTagMode } from "../modes/tag";
 import { prepareAgentMode } from "../modes/agent";
-import { runMultiAgentReview } from "../modes/review";
+import {
+  buildContextMarkdown,
+  formatTriageLine,
+  parseDebateRounds,
+  postTriageOnlyComment,
+  runMultiAgentReview,
+  runTriageAgent,
+} from "../modes/review";
 import { checkContainsTrigger } from "../github/validation/trigger";
 import { restoreConfigFromBase } from "../github/operations/restore-config";
 import { validateBranchName } from "../github/operations/branch";
@@ -270,20 +277,75 @@ async function run() {
     // prepare step above has already created the tracking comment and branch.
     // We only redirect the *execution* step — finally-block cleanup and
     // updateCommentLink still run identically to upstream tag mode.
-    let claudeResult: ClaudeRunResult;
-    if (
-      tagPrepareResult &&
-      context.inputs.multiAgentReview === "true" &&
+    const multiAgentEligible =
+      !!tagPrepareResult &&
       isEntityContext(context) &&
       context.isPR &&
-      isPullRequestEvent(context)
-    ) {
+      isPullRequestEvent(context);
+    const multiAgentInput = context.inputs.multiAgentReview;
+    const forcedMulti = multiAgentEligible && multiAgentInput === "true";
+    const autoMulti = multiAgentEligible && multiAgentInput === "auto";
+
+    let claudeResult: ClaudeRunResult;
+    if (forcedMulti && tagPrepareResult && isEntityContext(context)) {
       claudeResult = await runMultiAgentReview({
         context,
         octokit,
         githubToken,
         prepareResult: tagPrepareResult,
       });
+    } else if (autoMulti && tagPrepareResult && isEntityContext(context)) {
+      // Auto mode: run a zero-tool triage sub-agent that decides per-PR
+      // whether to spend the full multi-agent pipeline. Context markdown is
+      // built exactly once and reused — `fetchPullRequestPatches` is
+      // rate-limit sensitive and must not run twice.
+      const promptFile =
+        process.env.INPUT_PROMPT_FILE ||
+        `${process.env.RUNNER_TEMP}/claude-prompts/claude-prompt.txt`;
+      const promptConfig = await preparePrompt({ prompt: "", promptFile });
+
+      const githubContextMarkdown = await buildContextMarkdown({
+        context,
+        octokit,
+        prepareResult: tagPrepareResult,
+      });
+      const triageDecision = await runTriageAgent({
+        context,
+        githubContextMarkdown,
+        promptFilePath: promptConfig.path,
+      });
+      const triageLine = formatTriageLine(triageDecision);
+      console.log(
+        `[triage] decision=${triageDecision.decision} reason=${triageDecision.reason}`,
+      );
+
+      if (triageDecision.decision === "multi") {
+        claudeResult = await runMultiAgentReview({
+          context,
+          octokit,
+          githubToken,
+          prepareResult: tagPrepareResult,
+          preBuiltContextMarkdown: githubContextMarkdown,
+          triageLine,
+        });
+      } else {
+        // Single-path under auto: debate rounds are meaningless without
+        // multiple reviewer agents. Warn so operators notice silent drops.
+        if (parseDebateRounds(context.inputs.reviewDebateRounds) > 0) {
+          console.warn(
+            `[triage] review_debate_rounds=${context.inputs.reviewDebateRounds} ignored (triage routed to single-agent)`,
+          );
+        }
+        await postTriageOnlyComment({ octokit, context, triageLine });
+        claudeResult = await runClaude(promptConfig.path, {
+          claudeArgs: prepareResult.claudeArgs,
+          appendSystemPrompt: process.env.APPEND_SYSTEM_PROMPT,
+          model: process.env.ANTHROPIC_MODEL,
+          pathToClaudeCodeExecutable:
+            process.env.INPUT_PATH_TO_CLAUDE_CODE_EXECUTABLE,
+          showFullOutput: process.env.INPUT_SHOW_FULL_OUTPUT,
+        });
+      }
     } else {
       const promptFile =
         process.env.INPUT_PROMPT_FILE ||

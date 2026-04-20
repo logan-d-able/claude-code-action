@@ -133,6 +133,19 @@ export type AutomationContext = BaseContext & {
 // Union type for all contexts
 export type GitHubContext = ParsedGitHubContext | AutomationContext;
 
+const VALID_MULTI_AGENT_REVIEW_VALUES = ["true", "false", "auto"] as const;
+
+function parseMultiAgentReview(raw: string | undefined): string {
+  const value = raw ?? "false";
+  if ((VALID_MULTI_AGENT_REVIEW_VALUES as readonly string[]).includes(value)) {
+    return value;
+  }
+  console.warn(
+    `[multi_agent_review] invalid value "${value}", coercing to "false". Valid values: ${VALID_MULTI_AGENT_REVIEW_VALUES.join(", ")}.`,
+  );
+  return "false";
+}
+
 export function parseGitHubContext(): GitHubContext {
   const context = github.context;
 
@@ -166,7 +179,7 @@ export function parseGitHubContext(): GitHubContext {
       includeFixLinks: process.env.INCLUDE_FIX_LINKS === "true",
       includeCommentsByActor: process.env.INCLUDE_COMMENTS_BY_ACTOR ?? "",
       excludeCommentsByActor: process.env.EXCLUDE_COMMENTS_BY_ACTOR ?? "",
-      multiAgentReview: process.env.MULTI_AGENT_REVIEW ?? "false",
+      multiAgentReview: parseMultiAgentReview(process.env.MULTI_AGENT_REVIEW),
       reviewDebateRounds: process.env.REVIEW_DEBATE_ROUNDS ?? "0",
     },
   };
