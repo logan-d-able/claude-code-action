@@ -12,8 +12,10 @@
  *      Its only output is the JSON payload validated against `TRIAGE_SCHEMA`.
  *   2. Errors never throw out of this function. Any failure (SDK timeout,
  *      missing structured output, schema violation) is caught and reduced to
- *      `{decision: "single", reason: "triage failed: …"}` so the caller can
- *      cleanly fall back to single-agent review without wrapping in try/catch.
+ *      `{decision: "single", reason: "triage unavailable, see logs"}` so the
+ *      caller can cleanly fall back to single-agent review without wrapping
+ *      in try/catch. The raw SDK error stays in `console.error` only to
+ *      avoid leaking operational telemetry into public PR comments.
  *   3. The model is inherited from `process.env.ANTHROPIC_MODEL` — same as the
  *      review workers and synthesis — so operators can tune once for the whole
  *      review flow.
@@ -93,7 +95,10 @@ export async function runTriageAgent(
     console.error(
       `[triage] Failed after retries, falling back to single: ${msg}`,
     );
-    return { decision: "single", reason: `triage failed: ${msg}` };
+    // Keep the raw SDK error in `console.error` only. The public `reason` is
+    // embedded verbatim in a PR comment, and SDK errors can carry operational
+    // telemetry (rate-limit state, request IDs) that we don't want to leak.
+    return { decision: "single", reason: "triage unavailable, see logs" };
   }
 }
 
@@ -105,7 +110,7 @@ export function formatTriageLine(decision: TriageDecision): string {
   // The reason is embedded verbatim into a GitHub comment body, so run it
   // through the shared sanitizer (markdown/HTML stripping) before the
   // 500-char cap and whitespace collapse. The schema caps length to 500, but
-  // fallback paths (`triage failed: ...`) bypass the schema.
+  // the fallback sentinel bypasses the schema entirely.
   const reason = sanitizeContent(decision.reason)
     .slice(0, 500)
     .replace(/\s+/g, " ")

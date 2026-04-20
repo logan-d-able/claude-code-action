@@ -165,7 +165,7 @@ describe("runTriageAgent", () => {
     });
 
     expect(decision.decision).toBe("single");
-    expect(decision.reason).toMatch(/^triage failed:/);
+    expect(decision.reason).toBe("triage unavailable, see logs");
     // retry: maxAttempts=2
     expect(runClaudeCalls.length).toBeGreaterThanOrEqual(2);
   });
@@ -183,7 +183,9 @@ describe("runTriageAgent", () => {
     });
 
     expect(decision.decision).toBe("single");
-    expect(decision.reason).toContain("SDK timeout");
+    // Security invariant: raw SDK error must not leak into the public reason.
+    expect(decision.reason).toBe("triage unavailable, see logs");
+    expect(decision.reason).not.toContain("SDK timeout");
   });
 
   it("falls back to single on schema violation (missing field)", async () => {
@@ -200,7 +202,7 @@ describe("runTriageAgent", () => {
     });
 
     expect(decision.decision).toBe("single");
-    expect(decision.reason).toMatch(/^triage failed:/);
+    expect(decision.reason).toBe("triage unavailable, see logs");
   });
 
   it("falls back to single on invalid JSON output", async () => {
@@ -217,7 +219,7 @@ describe("runTriageAgent", () => {
     });
 
     expect(decision.decision).toBe("single");
-    expect(decision.reason).toMatch(/^triage failed:/);
+    expect(decision.reason).toBe("triage unavailable, see logs");
   });
 });
 
