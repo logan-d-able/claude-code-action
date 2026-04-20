@@ -302,7 +302,7 @@ async function run() {
       isPullRequestEvent(context);
     const multiAgentInput = context.inputs.multiAgentReview;
 
-    let claudeResult: ClaudeRunResult;
+    let claudeResult: ClaudeRunResult | undefined;
     if (
       multiAgentEligible &&
       multiAgentInput === "true" &&
@@ -318,12 +318,22 @@ async function run() {
         prepareResult: tagPrepareResult,
       });
     } else {
-      // All remaining paths (auto-triage + standard single) need a validated
-      // prompt file. Resolve once and share between triage and `runClaude`.
-      const promptFile =
-        process.env.INPUT_PROMPT_FILE ||
-        `${process.env.RUNNER_TEMP}/claude-prompts/claude-prompt.txt`;
-      const promptConfig = await preparePrompt({ prompt: "", promptFile });
+      // Source of truth for the prompt file: in tag mode `createPrompt`
+      // already wrote it, so `tagPrepareResult.promptFilePath` is the actual
+      // bytes on disk. Using it guarantees triage and any follow-up agent
+      // read the exact same prompt. In agent/other mode there is no
+      // `tagPrepareResult`; validate the user-supplied (or env-default) file
+      // via `preparePrompt`.
+      let promptFilePath: string;
+      if (tagPrepareResult) {
+        promptFilePath = tagPrepareResult.promptFilePath;
+      } else {
+        const promptFile =
+          process.env.INPUT_PROMPT_FILE ||
+          `${process.env.RUNNER_TEMP}/claude-prompts/claude-prompt.txt`;
+        const promptConfig = await preparePrompt({ prompt: "", promptFile });
+        promptFilePath = promptConfig.path;
+      }
 
       if (
         multiAgentEligible &&
@@ -343,7 +353,7 @@ async function run() {
         const triageDecision = await runTriageAgent({
           context,
           githubContextMarkdown,
-          promptFilePath: promptConfig.path,
+          promptFilePath,
         });
         const triageLine = formatTriageLine(triageDecision);
         console.log(
@@ -368,17 +378,15 @@ async function run() {
             );
           }
           await postTriageOnlyComment({ octokit, context, triageLine });
-          claudeResult = await runClaude(promptConfig.path, {
-            claudeArgs: prepareResult.claudeArgs,
-            appendSystemPrompt: process.env.APPEND_SYSTEM_PROMPT,
-            model: process.env.ANTHROPIC_MODEL,
-            pathToClaudeCodeExecutable:
-              process.env.INPUT_PATH_TO_CLAUDE_CODE_EXECUTABLE,
-            showFullOutput: process.env.INPUT_SHOW_FULL_OUTPUT,
-          });
+          // fall through to the shared `runClaude` call below
         }
-      } else {
-        claudeResult = await runClaude(promptConfig.path, {
+      }
+
+      // Shared single-agent execution for both the auto→single and the
+      // standard-single paths. Consolidating here means any future security
+      // fix or argument addition applies uniformly regardless of routing.
+      if (!claudeResult) {
+        claudeResult = await runClaude(promptFilePath, {
           claudeArgs: prepareResult.claudeArgs,
           appendSystemPrompt: process.env.APPEND_SYSTEM_PROMPT,
           model: process.env.ANTHROPIC_MODEL,
