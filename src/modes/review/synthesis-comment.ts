@@ -7,6 +7,7 @@
  * in `create-initial.ts` because its body starts with a unique marker.
  */
 
+import { sanitizeContent } from "../../github/utils/sanitizer";
 import type { Octokits } from "../../github/api/client";
 import type { ParsedGitHubContext } from "../../github/context";
 import { retryWithBackoff } from "../../utils/retry";
@@ -62,7 +63,7 @@ export function buildFallbackSynthesisBody(
   failureReason?: string,
 ): string {
   const header = failureReason
-    ? `⚠️ Synthesis agent failed (${failureReason}). Showing raw reviewer output below.`
+    ? `⚠️ Synthesis agent failed (${sanitizeContent(failureReason)}). Showing raw reviewer output below.`
     : "";
   const agentSections = allFindings
     .map((raw) => {

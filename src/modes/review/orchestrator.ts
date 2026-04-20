@@ -122,16 +122,26 @@ async function buildSynthesisClaudeArgs(params: {
 }): Promise<string> {
   const { context, githubToken, synthesisCommentId, branchInfo } = params;
 
+  // Force-disable commit signing for synthesis. `prepareMcpConfig` starts the
+  // `github_file_ops` MCP server whenever `useCommitSigning` is true; synthesis
+  // never uses that server (see `SYNTHESIS_TOOLS`), but a live server would
+  // give a prompt-injected agent an out-of-band path to commit files if the
+  // `--allowedTools` boundary ever leaks. Defence in depth.
+  const synthesisContext: ParsedGitHubContext = {
+    ...context,
+    inputs: { ...context.inputs, useCommitSigning: false },
+  };
+
   const mcpConfig = await prepareMcpConfig({
     githubToken,
-    owner: context.repository.owner,
-    repo: context.repository.repo,
+    owner: synthesisContext.repository.owner,
+    repo: synthesisContext.repository.repo,
     branch: branchInfo.claudeBranch || branchInfo.currentBranch,
     baseBranch: branchInfo.baseBranch,
     claudeCommentId: synthesisCommentId.toString(),
     allowedTools: Array.from(SYNTHESIS_TOOLS),
     mode: "tag",
-    context,
+    context: synthesisContext,
   });
 
   const escapedConfig = mcpConfig.replace(/'/g, "'\\''");
@@ -342,6 +352,9 @@ export async function runMultiAgentReview(
     );
 
     for (let round = 0; round < debateRounds; round++) {
+      // Snapshot rebuttals from prior rounds before this round's results are
+      // appended. Each debater sees only closed-out rounds — never peers'
+      // in-flight responses from the current round.
       const priorRoundRebuttals = allRebuttals.slice();
       const debateResults = await Promise.allSettled(
         participating.map((agent) => {

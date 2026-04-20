@@ -17,7 +17,7 @@ export type ReviewAgent = {
    * no MCP servers, no Edit/Write, no Bash. The orchestrator passes this set
    * verbatim to `--allowedTools`; callers do not inherit parent claudeArgs.
    */
-  tools: string[];
+  readonly tools: readonly string[];
 };
 
 /**

@@ -345,6 +345,24 @@ describe("buildFallbackSynthesisBody", () => {
     expect(body).not.toContain("Synthesis agent failed");
   });
 
+  it("sanitizes the failure reason before rendering into the banner", () => {
+    const body = buildFallbackSynthesisBody(
+      [
+        {
+          agent_id: "a1",
+          agent_name: "Agent One",
+          summary: "fine",
+          findings: [],
+        },
+      ],
+      "timeout <!-- inject --> \u200B bidi\u2066",
+    );
+    expect(body).toContain("Synthesis agent failed");
+    expect(body).not.toContain("<!-- inject -->");
+    expect(body).not.toContain("\u200B");
+    expect(body).not.toContain("\u2066");
+  });
+
   it("sanitizes agent findings before rendering into markdown body", () => {
     const body = buildFallbackSynthesisBody([
       {
