@@ -408,6 +408,7 @@ export async function runMultiAgentReview(
       allFindings,
       allRebuttals,
       synthesisCommentId,
+      skippedReviewers: round1Errors,
     });
 
     const synthesisResult = await runClaude(prepareResult.promptFilePath, {
@@ -427,7 +428,7 @@ export async function runMultiAgentReview(
           octokit,
           context,
           commentId: synthesisCommentId,
-          body: buildFallbackSynthesisBody(allFindings, reason),
+          body: buildFallbackSynthesisBody(allFindings, reason, round1Errors),
         });
       } catch (fallbackError) {
         console.error(
@@ -449,7 +450,7 @@ export async function runMultiAgentReview(
         octokit,
         context,
         commentId: synthesisCommentId,
-        body: buildFallbackSynthesisBody(allFindings, reason),
+        body: buildFallbackSynthesisBody(allFindings, reason, round1Errors),
       });
     } catch (fallbackError) {
       console.error(

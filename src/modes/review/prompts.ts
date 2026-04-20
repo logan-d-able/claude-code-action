@@ -6,6 +6,7 @@
  * passed via `appendSystemPrompt` — the helpers in this file produce that text.
  */
 
+import { sanitizeContent } from "../../github/utils/sanitizer";
 import type { ReviewAgent } from "./agents";
 import { sanitizeFindings, sanitizeRebuttal } from "./sanitize";
 import type { AgentFindings, AgentRebuttal } from "./schemas";
@@ -78,6 +79,13 @@ type SynthesisParams = BaseParams & {
   allFindings?: AgentFindings[];
   allRebuttals?: AgentRebuttal[];
   synthesisCommentId: number;
+  /**
+   * Per-agent failure notes from round 1 (format: `"<agent_id>: <error msg>"`).
+   * Synthesis MUST disclose these so the PR author does not mistake a partial
+   * review for a complete one — especially critical when a security-perspective
+   * agent fails silently while others succeed.
+   */
+  skippedReviewers?: string[];
 };
 
 export type BuildSubAgentSystemPromptParams =
@@ -139,7 +147,12 @@ function buildRoleSection(params: BuildSubAgentSystemPromptParams): string {
   const rebuttals = params.allRebuttals?.length
     ? `\n\n### Debate round responses\n\n${renderRebuttals(params.allRebuttals)}`
     : "";
-  return `## Your custom sub-agent role\n\nYou are the synthesis agent. Several reviewers have submitted findings; your job is to consolidate them into a single, useful review. Deduplicate overlapping findings, drop anything convincingly rebutted, and order by severity (critical > major > minor > nit).${findings}${rebuttals}`;
+  const skipped = params.skippedReviewers?.length
+    ? `\n\n### Reviewers that failed (not included above)\n\n${params.skippedReviewers
+        .map((line) => `- ${sanitizeContent(line)}`)
+        .join("\n")}`
+    : "";
+  return `## Your custom sub-agent role\n\nYou are the synthesis agent. Several reviewers have submitted findings; your job is to consolidate them into a single, useful review. Deduplicate overlapping findings, drop anything convincingly rebutted, and order by severity (critical > major > minor > nit).${findings}${rebuttals}${skipped}`;
 }
 
 function buildOutputSection(params: BuildSubAgentSystemPromptParams): string {
@@ -169,6 +182,9 @@ function buildOutputSection(params: BuildSubAgentSystemPromptParams): string {
 
   const markerLine = `\`${SYNTHESIS_COMMENT_MARKER}\``;
   const commentIdLine = `The target comment id is ${params.synthesisCommentId}; it is already wired via MCP — do not change it.`;
+  const skippedInstruction = params.skippedReviewers?.length
+    ? `If the role section lists reviewers under "Reviewers that failed", include a "⚠️ Skipped reviewers" section at the bottom of the body listing each failed agent id (not the raw error message). This disclosure is mandatory whenever any reviewer failed.`
+    : null;
 
   return [
     "## Required output",
@@ -178,6 +194,7 @@ function buildOutputSection(params: BuildSubAgentSystemPromptParams): string {
     'Then a blank line, a one-sentence verdict (e.g. "Found 2 critical issues, 3 major, 1 minor."), then the consolidated findings grouped by severity.',
     "For each finding with a concrete file/line, ALSO call `mcp__github_inline_comment__create_inline_comment` with `confirmed: true` and a targeted message. Use inline comments only for specific, actionable feedback; keep prose in the main comment.",
     commentIdLine,
+    ...(skippedInstruction ? [skippedInstruction] : []),
     "Do NOT modify any files. Do NOT create or update any other comments.",
   ].join("\n");
 }

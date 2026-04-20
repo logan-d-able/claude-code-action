@@ -61,6 +61,7 @@ export async function updateSynthesisComment(params: {
 export function buildFallbackSynthesisBody(
   allFindings: AgentFindings[],
   failureReason?: string,
+  skippedReviewers?: string[],
 ): string {
   const header = failureReason
     ? `⚠️ Synthesis agent failed (${sanitizeContent(failureReason)}). Showing raw reviewer output below.`
@@ -80,5 +81,10 @@ export function buildFallbackSynthesisBody(
       return `### ${f.agent_name}\n\n> ${f.summary}\n\n${items}`;
     })
     .join("\n\n---\n\n");
-  return [header, agentSections].filter(Boolean).join("\n\n");
+  const skippedFooter = skippedReviewers?.length
+    ? `### ⚠️ Skipped reviewers\n\n${skippedReviewers
+        .map((line) => `- ${sanitizeContent(line)}`)
+        .join("\n")}`
+    : "";
+  return [header, agentSections, skippedFooter].filter(Boolean).join("\n\n");
 }

@@ -287,6 +287,45 @@ describe("buildSubAgentSystemPrompt", () => {
     expect(prompt).toContain("arr[0] before length check");
     expect(prompt).toContain("x.ts");
   });
+
+  it("surfaces skipped reviewers in synthesis prompt and mandates footer disclosure", () => {
+    const prompt = buildSubAgentSystemPrompt({
+      role: "synthesis",
+      githubContextMarkdown: "ctx",
+      synthesisCommentId: 1,
+      skippedReviewers: [
+        "security-reviewer: SDK timeout after 120s",
+        "correctness-reviewer: invalid JSON response",
+      ],
+    });
+    expect(prompt).toContain("Reviewers that failed");
+    expect(prompt).toContain("security-reviewer: SDK timeout after 120s");
+    expect(prompt).toContain("correctness-reviewer: invalid JSON response");
+    expect(prompt).toContain("⚠️ Skipped reviewers");
+    expect(prompt).toMatch(/mandatory whenever any reviewer failed/i);
+  });
+
+  it("omits the skipped-reviewers disclosure when no reviewers failed", () => {
+    const prompt = buildSubAgentSystemPrompt({
+      role: "synthesis",
+      githubContextMarkdown: "ctx",
+      synthesisCommentId: 1,
+    });
+    expect(prompt).not.toContain("Reviewers that failed");
+    expect(prompt).not.toContain("⚠️ Skipped reviewers");
+  });
+
+  it("sanitizes skipped-reviewer error messages in synthesis prompt", () => {
+    const prompt = buildSubAgentSystemPrompt({
+      role: "synthesis",
+      githubContextMarkdown: "ctx",
+      synthesisCommentId: 1,
+      skippedReviewers: ["security-reviewer: boom <!-- inject --> \u200B"],
+    });
+    expect(prompt).not.toContain("<!-- inject -->");
+    expect(prompt).not.toContain("\u200B");
+    expect(prompt).toContain("security-reviewer: boom");
+  });
 });
 
 describe("SYNTHESIS_COMMENT_MARKER", () => {
@@ -361,6 +400,63 @@ describe("buildFallbackSynthesisBody", () => {
     expect(body).not.toContain("<!-- inject -->");
     expect(body).not.toContain("\u200B");
     expect(body).not.toContain("\u2066");
+  });
+
+  it("appends a skipped-reviewers footer when any round-1 agent failed", () => {
+    const body = buildFallbackSynthesisBody(
+      [
+        {
+          agent_id: "a1",
+          agent_name: "Correctness Reviewer",
+          summary: "fine",
+          findings: [],
+        },
+      ],
+      undefined,
+      [
+        "security-reviewer: SDK timeout after 120s",
+        "quality-reviewer: invalid JSON response",
+      ],
+    );
+    expect(body).toContain("⚠️ Skipped reviewers");
+    expect(body).toContain("security-reviewer: SDK timeout after 120s");
+    expect(body).toContain("quality-reviewer: invalid JSON response");
+  });
+
+  it("omits the skipped-reviewers footer when every reviewer succeeded", () => {
+    const body = buildFallbackSynthesisBody(
+      [
+        {
+          agent_id: "a1",
+          agent_name: "Agent One",
+          summary: "fine",
+          findings: [],
+        },
+      ],
+      undefined,
+      [],
+    );
+    expect(body).not.toContain("⚠️ Skipped reviewers");
+  });
+
+  it("sanitizes skipped-reviewer error messages in the fallback footer", () => {
+    const body = buildFallbackSynthesisBody(
+      [
+        {
+          agent_id: "a1",
+          agent_name: "Agent One",
+          summary: "fine",
+          findings: [],
+        },
+      ],
+      undefined,
+      ["security-reviewer: boom <!-- inject --> \u200B bidi\u2066"],
+    );
+    expect(body).toContain("⚠️ Skipped reviewers");
+    expect(body).not.toContain("<!-- inject -->");
+    expect(body).not.toContain("\u200B");
+    expect(body).not.toContain("\u2066");
+    expect(body).toContain("security-reviewer: boom");
   });
 
   it("sanitizes agent findings before rendering into markdown body", () => {
