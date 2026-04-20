@@ -26,6 +26,7 @@ import type { GitHubContext } from "../github/context";
 import { detectMode } from "../modes/detector";
 import { prepareTagMode } from "../modes/tag";
 import { prepareAgentMode } from "../modes/agent";
+import { runMultiAgentReview } from "../modes/review";
 import { checkContainsTrigger } from "../github/validation/trigger";
 import { restoreConfigFromBase } from "../github/operations/restore-config";
 import { validateBranchName } from "../github/operations/branch";
@@ -209,10 +210,13 @@ async function run() {
     console.log(
       `Preparing with mode: ${modeName} for event: ${context.eventName}`,
     );
-    const prepareResult =
+    const tagPrepareResult =
       modeName === "tag"
         ? await prepareTagMode({ context, octokit, githubToken })
-        : await prepareAgentMode({ context, octokit, githubToken });
+        : undefined;
+    const prepareResult =
+      tagPrepareResult ??
+      (await prepareAgentMode({ context, octokit, githubToken }));
 
     commentId = prepareResult.commentId;
     claudeBranch = prepareResult.branchInfo.claudeBranch;
@@ -262,22 +266,42 @@ async function run() {
       process.env.INPUT_PATH_TO_CLAUDE_CODE_EXECUTABLE,
     );
 
-    const promptFile =
-      process.env.INPUT_PROMPT_FILE ||
-      `${process.env.RUNNER_TEMP}/claude-prompts/claude-prompt.txt`;
-    const promptConfig = await preparePrompt({
-      prompt: "",
-      promptFile,
-    });
+    // Multi-agent review is an additive branch on top of tag mode: the tag
+    // prepare step above has already created the tracking comment and branch.
+    // We only redirect the *execution* step — finally-block cleanup and
+    // updateCommentLink still run identically to upstream tag mode.
+    let claudeResult: ClaudeRunResult;
+    if (
+      tagPrepareResult &&
+      context.inputs.multiAgentReview === "true" &&
+      isEntityContext(context) &&
+      context.isPR &&
+      isPullRequestEvent(context)
+    ) {
+      claudeResult = await runMultiAgentReview({
+        context,
+        octokit,
+        githubToken,
+        prepareResult: tagPrepareResult,
+      });
+    } else {
+      const promptFile =
+        process.env.INPUT_PROMPT_FILE ||
+        `${process.env.RUNNER_TEMP}/claude-prompts/claude-prompt.txt`;
+      const promptConfig = await preparePrompt({
+        prompt: "",
+        promptFile,
+      });
 
-    const claudeResult: ClaudeRunResult = await runClaude(promptConfig.path, {
-      claudeArgs: prepareResult.claudeArgs,
-      appendSystemPrompt: process.env.APPEND_SYSTEM_PROMPT,
-      model: process.env.ANTHROPIC_MODEL,
-      pathToClaudeCodeExecutable:
-        process.env.INPUT_PATH_TO_CLAUDE_CODE_EXECUTABLE,
-      showFullOutput: process.env.INPUT_SHOW_FULL_OUTPUT,
-    });
+      claudeResult = await runClaude(promptConfig.path, {
+        claudeArgs: prepareResult.claudeArgs,
+        appendSystemPrompt: process.env.APPEND_SYSTEM_PROMPT,
+        model: process.env.ANTHROPIC_MODEL,
+        pathToClaudeCodeExecutable:
+          process.env.INPUT_PATH_TO_CLAUDE_CODE_EXECUTABLE,
+        showFullOutput: process.env.INPUT_SHOW_FULL_OUTPUT,
+      });
+    }
 
     claudeSuccess = claudeResult.conclusion === "success";
     executionFile = claudeResult.executionFile;

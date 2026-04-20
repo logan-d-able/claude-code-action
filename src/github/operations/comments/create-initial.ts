@@ -12,6 +12,7 @@ import {
   isPullRequestEvent,
   type ParsedGitHubContext,
 } from "../../context";
+import { SYNTHESIS_COMMENT_MARKER } from "../../../modes/review/prompts";
 import type { Octokit } from "@octokit/rest";
 
 const CLAUDE_APP_BOT_ID = 209825114;
@@ -39,6 +40,12 @@ export async function createInitialComment(
         issue_number: context.entityNumber,
       });
       const existingComment = comments.data.find((comment) => {
+        // Never reuse the multi-agent synthesis comment as the tag-mode
+        // tracking comment: it's authored by the same bot but carries its
+        // own lifecycle marker.
+        if (comment.body?.startsWith(SYNTHESIS_COMMENT_MARKER)) {
+          return false;
+        }
         const idMatch = comment.user?.id === CLAUDE_APP_BOT_ID;
         const botNameMatch =
           comment.user?.type === "Bot" &&

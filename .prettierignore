@@ -1,2 +1,6 @@
 # Test fixtures should not be formatted to preserve exact output matching
 test/fixtures/
+
+# Local agent runtime artifacts (untracked)
+.omc/
+.omx/
