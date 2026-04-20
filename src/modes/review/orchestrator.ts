@@ -28,6 +28,7 @@ import {
   formatContext,
   formatReviewComments,
 } from "../../github/data/formatter";
+import { sanitizeContent } from "../../github/utils/sanitizer";
 import { prepareMcpConfig } from "../../mcp/install-mcp-server";
 import type { PrepareTagResult } from "../tag";
 import { DEFAULT_REVIEW_AGENTS } from "./agents";
@@ -333,7 +334,13 @@ export async function runMultiAgentReview(
   });
 
   if (allFindings.length === 0) {
-    const body = `No reviewer agents produced findings.\n\n${round1Errors.length ? `Errors:\n\n- ${round1Errors.join("\n- ")}` : ""}`;
+    // Route raw error strings through sanitizeContent before embedding them in
+    // a GitHub-rendered comment body — same invariant applied by
+    // `buildFallbackSynthesisBody` on the peer path.
+    const errorBlock = round1Errors.length
+      ? `Errors:\n\n${round1Errors.map((e) => `- ${sanitizeContent(e)}`).join("\n")}`
+      : "";
+    const body = `No reviewer agents produced findings.${errorBlock ? `\n\n${errorBlock}` : ""}`;
     await updateSynthesisComment({
       octokit,
       context,
@@ -346,6 +353,11 @@ export async function runMultiAgentReview(
   // Round 2: optional debate. Only agents that produced findings in round 1
   // participate — others have nothing to defend.
   const allRebuttals: AgentRebuttal[] = [];
+  // Debate-round failures feed the same skipped-reviewers disclosure as round 1.
+  // Without this, a debate failure for (e.g.) security-reviewer is only logged
+  // to stderr — synthesis still runs with the round-1 findings and the PR
+  // author sees no indication that the debate perspective was missing.
+  const debateErrors: string[] = [];
   if (debateRounds > 0) {
     const participating = agents.filter((agent) =>
       allFindings.some((f) => f.agent_id === agent.id),
@@ -389,6 +401,7 @@ export async function runMultiAgentReview(
           console.error(
             `[review] Debate round ${round + 1} failed for ${agentId}: ${msg}`,
           );
+          debateErrors.push(`${agentId} (debate round ${round + 1}): ${msg}`);
         }
       });
     }
@@ -408,7 +421,7 @@ export async function runMultiAgentReview(
       allFindings,
       allRebuttals,
       synthesisCommentId,
-      skippedReviewers: round1Errors,
+      skippedReviewers: [...round1Errors, ...debateErrors],
     });
 
     const synthesisResult = await runClaude(prepareResult.promptFilePath, {
@@ -428,7 +441,10 @@ export async function runMultiAgentReview(
           octokit,
           context,
           commentId: synthesisCommentId,
-          body: buildFallbackSynthesisBody(allFindings, reason, round1Errors),
+          body: buildFallbackSynthesisBody(allFindings, reason, [
+            ...round1Errors,
+            ...debateErrors,
+          ]),
         });
       } catch (fallbackError) {
         console.error(
@@ -450,7 +466,10 @@ export async function runMultiAgentReview(
         octokit,
         context,
         commentId: synthesisCommentId,
-        body: buildFallbackSynthesisBody(allFindings, reason, round1Errors),
+        body: buildFallbackSynthesisBody(allFindings, reason, [
+          ...round1Errors,
+          ...debateErrors,
+        ]),
       });
     } catch (fallbackError) {
       console.error(

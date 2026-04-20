@@ -508,4 +508,49 @@ describe("buildFallbackSynthesisBody", () => {
     expect(body).toContain("x.ts:10");
     expect(body).toContain("Clean summary.");
   });
+
+  it("renders debate-round failures alongside round-1 failures in the footer", () => {
+    // Orchestrator merges `round1Errors` and `debateErrors` into a single
+    // `skippedReviewers` list before rendering. Both formats must surface
+    // intact so the PR author knows *which* round a reviewer dropped out in.
+    const body = buildFallbackSynthesisBody(
+      [
+        {
+          agent_id: "a1",
+          agent_name: "Correctness Reviewer",
+          summary: "fine",
+          findings: [],
+        },
+      ],
+      undefined,
+      [
+        "security-reviewer: SDK timeout after 120s",
+        "quality-reviewer (debate round 2): invalid JSON response",
+      ],
+    );
+    expect(body).toContain("⚠️ Skipped reviewers");
+    expect(body).toContain("security-reviewer: SDK timeout after 120s");
+    expect(body).toContain(
+      "quality-reviewer (debate round 2): invalid JSON response",
+    );
+  });
+});
+
+describe("buildSubAgentSystemPrompt synthesis prompt — debate failures", () => {
+  it("lists debate-round failures in the synthesis prompt alongside round-1 failures", () => {
+    const prompt = buildSubAgentSystemPrompt({
+      role: "synthesis",
+      githubContextMarkdown: "ctx",
+      synthesisCommentId: 1,
+      skippedReviewers: [
+        "security-reviewer: SDK timeout after 120s",
+        "quality-reviewer (debate round 1): invalid JSON response",
+      ],
+    });
+    expect(prompt).toContain("Reviewers that failed");
+    expect(prompt).toContain("security-reviewer: SDK timeout after 120s");
+    expect(prompt).toContain(
+      "quality-reviewer (debate round 1): invalid JSON response",
+    );
+  });
 });
