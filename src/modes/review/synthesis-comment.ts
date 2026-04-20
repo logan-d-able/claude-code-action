@@ -10,6 +10,7 @@
 import type { Octokits } from "../../github/api/client";
 import type { ParsedGitHubContext } from "../../github/context";
 import { SYNTHESIS_COMMENT_MARKER } from "./prompts";
+import { sanitizeFindings } from "./sanitize";
 import type { AgentFindings } from "./schemas";
 
 export async function createSynthesisComment(params: {
@@ -59,7 +60,8 @@ export function buildFallbackSynthesisBody(
     ? `⚠️ Synthesis agent failed (${failureReason}). Showing raw reviewer output below.`
     : "";
   const agentSections = allFindings
-    .map((f) => {
+    .map((raw) => {
+      const f = sanitizeFindings(raw);
       if (f.findings.length === 0) {
         return `### ${f.agent_name}\n\n_No findings._\n\n> ${f.summary}`;
       }

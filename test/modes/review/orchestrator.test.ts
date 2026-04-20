@@ -315,4 +315,54 @@ describe("buildFallbackSynthesisBody", () => {
     ]);
     expect(body).not.toContain("Synthesis agent failed");
   });
+
+  it("sanitizes agent findings before rendering into markdown body", () => {
+    const body = buildFallbackSynthesisBody([
+      {
+        agent_id: "a1",
+        agent_name: "A1 <!--name-->",
+        summary: "summary <!-- injected --> \u200B",
+        findings: [
+          {
+            severity: "major",
+            title: "T\u2066bidi",
+            description: "D ![alt](x) end",
+            file: "<!--f-->",
+            line: 1,
+          },
+        ],
+      },
+    ]);
+    expect(body).not.toContain("<!--name-->");
+    expect(body).not.toContain("<!-- injected -->");
+    expect(body).not.toContain("\u200B");
+    expect(body).not.toContain("\u2066");
+    expect(body).not.toContain("![alt](x)");
+    expect(body).toContain("![](x)");
+    expect(body).not.toContain("<!--f-->");
+  });
+
+  it("leaves benign fallback content untouched", () => {
+    const body = buildFallbackSynthesisBody([
+      {
+        agent_id: "a1",
+        agent_name: "Agent One",
+        summary: "Clean summary.",
+        findings: [
+          {
+            severity: "major",
+            title: "Null deref",
+            description: "arr[0] before length check",
+            file: "x.ts",
+            line: 10,
+          },
+        ],
+      },
+    ]);
+    expect(body).toContain("Agent One");
+    expect(body).toContain("Null deref");
+    expect(body).toContain("arr[0] before length check");
+    expect(body).toContain("x.ts:10");
+    expect(body).toContain("Clean summary.");
+  });
 });
