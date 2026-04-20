@@ -30,6 +30,8 @@ import {
 } from "../../github/data/formatter";
 import { sanitizeContent } from "../../github/utils/sanitizer";
 import { prepareMcpConfig } from "../../mcp/install-mcp-server";
+import { retryWithBackoff } from "../../utils/retry";
+import type { RetryOptions } from "../../utils/retry";
 import type { PrepareTagResult } from "../tag";
 import { DEFAULT_REVIEW_AGENTS } from "./agents";
 import type { ReviewAgent } from "./agents";
@@ -158,6 +160,25 @@ function executionFilePath(suffix: string): string {
   return `${base}/claude-execution-review-${suffix}.json`;
 }
 
+/**
+ * Retry policy for worker + debate Claude invocations.
+ *
+ * Sub-agents run with zero MCP servers (see `SYNTHESIS_TOOLS` docstring), so
+ * retries are idempotent — there is no external state to double-mutate. Most
+ * observed failures are stochastic: transient SDK timeouts, rate-limit bursts
+ * when 3 workers fire in parallel, or Claude occasionally returning non-JSON
+ * for a schema-constrained call. 2 attempts (1 retry) with a short initial
+ * backoff covers these without multiplying token cost by 3×.
+ *
+ * Synthesis is intentionally NOT retried here — it writes to GitHub via MCP
+ * and a second attempt could duplicate inline comments.
+ */
+const WORKER_RETRY_OPTIONS: RetryOptions = {
+  maxAttempts: 2,
+  initialDelayMs: 2000,
+  maxDelayMs: 10000,
+};
+
 async function buildContextMarkdown(params: {
   context: ParsedGitHubContext;
   octokit: Octokits;
@@ -197,26 +218,28 @@ async function runAgentRoundOne(params: {
     githubContextMarkdown,
   });
 
-  const result = await runClaude(promptFilePath, {
-    claudeArgs: buildSubAgentClaudeArgs(agent.tools, AGENT_FINDINGS_SCHEMA),
-    appendSystemPrompt,
-    model: process.env.ANTHROPIC_MODEL,
-    pathToClaudeCodeExecutable:
-      process.env.INPUT_PATH_TO_CLAUDE_CODE_EXECUTABLE,
-    showFullOutput: process.env.INPUT_SHOW_FULL_OUTPUT,
-    executionFilePath: executionFilePath(`r1-${agent.id}`),
-  });
+  return await retryWithBackoff(async () => {
+    const result = await runClaude(promptFilePath, {
+      claudeArgs: buildSubAgentClaudeArgs(agent.tools, AGENT_FINDINGS_SCHEMA),
+      appendSystemPrompt,
+      model: process.env.ANTHROPIC_MODEL,
+      pathToClaudeCodeExecutable:
+        process.env.INPUT_PATH_TO_CLAUDE_CODE_EXECUTABLE,
+      showFullOutput: process.env.INPUT_SHOW_FULL_OUTPUT,
+      executionFilePath: executionFilePath(`r1-${agent.id}`),
+    });
 
-  if (!result.structuredOutput) {
-    throw new Error(
-      `Agent ${agent.id} returned no structured output (conclusion: ${result.conclusion})`,
+    if (!result.structuredOutput) {
+      throw new Error(
+        `Agent ${agent.id} returned no structured output (conclusion: ${result.conclusion})`,
+      );
+    }
+    return validateStructuredOutput<AgentFindings>(
+      result.structuredOutput,
+      ["agent_id", "agent_name", "summary", "findings"],
+      `Agent ${agent.id} Round 1`,
     );
-  }
-  return validateStructuredOutput<AgentFindings>(
-    result.structuredOutput,
-    ["agent_id", "agent_name", "summary", "findings"],
-    `Agent ${agent.id} Round 1`,
-  );
+  }, WORKER_RETRY_OPTIONS);
 }
 
 async function runAgentDebate(params: {
@@ -248,29 +271,31 @@ async function runAgentDebate(params: {
     priorRoundRebuttals,
   });
 
-  const result = await runClaude(promptFilePath, {
-    claudeArgs: buildSubAgentClaudeArgs(agent.tools, AGENT_REBUTTAL_SCHEMA),
-    appendSystemPrompt,
-    model: process.env.ANTHROPIC_MODEL,
-    pathToClaudeCodeExecutable:
-      process.env.INPUT_PATH_TO_CLAUDE_CODE_EXECUTABLE,
-    showFullOutput: process.env.INPUT_SHOW_FULL_OUTPUT,
-    // Include the round number — without it, debate rounds 2+ overwrite
-    // each earlier round's log for the same agent and the audit trail is
-    // silently lost.
-    executionFilePath: executionFilePath(`r2-${roundNumber}-${agent.id}`),
-  });
+  return await retryWithBackoff(async () => {
+    const result = await runClaude(promptFilePath, {
+      claudeArgs: buildSubAgentClaudeArgs(agent.tools, AGENT_REBUTTAL_SCHEMA),
+      appendSystemPrompt,
+      model: process.env.ANTHROPIC_MODEL,
+      pathToClaudeCodeExecutable:
+        process.env.INPUT_PATH_TO_CLAUDE_CODE_EXECUTABLE,
+      showFullOutput: process.env.INPUT_SHOW_FULL_OUTPUT,
+      // Include the round number — without it, debate rounds 2+ overwrite
+      // each earlier round's log for the same agent and the audit trail is
+      // silently lost.
+      executionFilePath: executionFilePath(`r2-${roundNumber}-${agent.id}`),
+    });
 
-  if (!result.structuredOutput) {
-    throw new Error(
-      `Agent ${agent.id} returned no structured output in debate round`,
+    if (!result.structuredOutput) {
+      throw new Error(
+        `Agent ${agent.id} returned no structured output in debate round`,
+      );
+    }
+    return validateStructuredOutput<AgentRebuttal>(
+      result.structuredOutput,
+      ["agent_id", "agent_name", "responses"],
+      `Agent ${agent.id} Debate`,
     );
-  }
-  return validateStructuredOutput<AgentRebuttal>(
-    result.structuredOutput,
-    ["agent_id", "agent_name", "responses"],
-    `Agent ${agent.id} Debate`,
-  );
+  }, WORKER_RETRY_OPTIONS);
 }
 
 export async function runMultiAgentReview(

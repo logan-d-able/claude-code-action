@@ -723,6 +723,189 @@ describe("runMultiAgentReview", () => {
       expect(call.options.appendSystemPrompt).toContain("Prior debate rounds");
     }
   });
+
+  it("retries round-1 worker on transient failure and recovers", async () => {
+    // Track attempts per agent so we can simulate a first-attempt transient
+    // failure (e.g. SDK timeout, non-JSON response) and a successful retry.
+    const attemptsByAgent = new Map<string, number>();
+    runClaudeImpl = async (_promptPath, options) => {
+      if (options.executionFilePath?.includes("synthesis")) {
+        return { conclusion: "success" };
+      }
+      const agentId = inferAgentIdFromExecPath(options.executionFilePath);
+      const n = (attemptsByAgent.get(agentId) ?? 0) + 1;
+      attemptsByAgent.set(agentId, n);
+      if (agentId === "correctness-reviewer" && n === 1) {
+        throw new Error("transient SDK timeout");
+      }
+      return {
+        conclusion: "success",
+        structuredOutput: JSON.stringify({
+          agent_id: agentId,
+          agent_name: "Agent",
+          summary: "ok",
+          findings: [],
+        }),
+      };
+    };
+
+    const { octokit, updateCalls } = makeOctokit();
+    const { runMultiAgentReview } = await import(
+      "../../../src/modes/review/orchestrator"
+    );
+    const result = await runMultiAgentReview({
+      context: makeContext(),
+      octokit,
+      githubToken: "token",
+      prepareResult: PREPARE_RESULT,
+    });
+
+    expect(result.conclusion).toBe("success");
+    // 2 attempts for correctness-reviewer (1 fail + 1 success) + 1 each for
+    // the other two + 1 synthesis = 5.
+    expect(runClaudeCalls).toHaveLength(5);
+    expect(attemptsByAgent.get("correctness-reviewer")).toBe(2);
+    // No skipped-reviewers disclosure — retry absorbed the failure.
+    expect(updateCalls).toHaveLength(0);
+  });
+
+  it("surfaces worker failure after retry exhaustion in skipped-reviewers disclosure", async () => {
+    const attemptsByAgent = new Map<string, number>();
+    runClaudeImpl = async (_promptPath, options) => {
+      if (options.executionFilePath?.includes("synthesis")) {
+        // Force fallback path so we can inspect the rendered body.
+        throw new Error("synthesis crashed");
+      }
+      const agentId = inferAgentIdFromExecPath(options.executionFilePath);
+      const n = (attemptsByAgent.get(agentId) ?? 0) + 1;
+      attemptsByAgent.set(agentId, n);
+      if (agentId === "security-reviewer") {
+        throw new Error("hard failure");
+      }
+      return {
+        conclusion: "success",
+        structuredOutput: JSON.stringify({
+          agent_id: agentId,
+          agent_name: "Agent",
+          summary: "ok",
+          findings: [],
+        }),
+      };
+    };
+
+    const { octokit, updateCalls } = makeOctokit();
+    const { runMultiAgentReview } = await import(
+      "../../../src/modes/review/orchestrator"
+    );
+    const result = await runMultiAgentReview({
+      context: makeContext(),
+      octokit,
+      githubToken: "token",
+      prepareResult: PREPARE_RESULT,
+    });
+
+    expect(result.conclusion).toBe("failure");
+    // security-reviewer retried once (2 total attempts) before giving up.
+    expect(attemptsByAgent.get("security-reviewer")).toBe(2);
+    // Fallback body must disclose the skipped reviewer.
+    expect(updateCalls).toHaveLength(1);
+    expect(updateCalls[0]!.body).toContain("security-reviewer");
+    expect(updateCalls[0]!.body).toContain("hard failure");
+  });
+
+  it("retries debate-round worker on transient failure and recovers", async () => {
+    const debateAttemptsByAgent = new Map<string, number>();
+    runClaudeImpl = async (_promptPath, options) => {
+      if (options.executionFilePath?.includes("synthesis")) {
+        return { conclusion: "success" };
+      }
+      const agentId = inferAgentIdFromExecPath(options.executionFilePath);
+      if (options.executionFilePath?.includes("r2-")) {
+        const n = (debateAttemptsByAgent.get(agentId) ?? 0) + 1;
+        debateAttemptsByAgent.set(agentId, n);
+        if (agentId === "quality-reviewer" && n === 1) {
+          throw new Error("transient debate timeout");
+        }
+        return {
+          conclusion: "success",
+          structuredOutput: JSON.stringify({
+            agent_id: agentId,
+            agent_name: "Agent",
+            responses: [
+              {
+                regarding_finding_title: "X",
+                stance: "agree",
+                reasoning: "because",
+              },
+            ],
+          }),
+        };
+      }
+      return {
+        conclusion: "success",
+        structuredOutput: JSON.stringify({
+          agent_id: agentId,
+          agent_name: "Agent",
+          summary: "ok",
+          findings: [{ severity: "minor", title: "X", description: "x" }],
+        }),
+      };
+    };
+
+    const { octokit, updateCalls } = makeOctokit();
+    const { runMultiAgentReview } = await import(
+      "../../../src/modes/review/orchestrator"
+    );
+    const result = await runMultiAgentReview({
+      context: makeContext({ reviewDebateRounds: "1" }),
+      octokit,
+      githubToken: "token",
+      prepareResult: PREPARE_RESULT,
+    });
+
+    expect(result.conclusion).toBe("success");
+    expect(debateAttemptsByAgent.get("quality-reviewer")).toBe(2);
+    // Call count: 3 R1 + 3 debate attempts for non-failing + 2 debate
+    // attempts for quality-reviewer (1 fail + 1 retry) + 1 synthesis = 8.
+    expect(runClaudeCalls).toHaveLength(8);
+    // No disclosure because retry absorbed the debate failure.
+    expect(updateCalls).toHaveLength(0);
+  });
+
+  it("synthesis is never retried (non-idempotent GitHub writes)", async () => {
+    let synthesisAttempts = 0;
+    runClaudeImpl = async (_promptPath, options) => {
+      if (options.executionFilePath?.includes("synthesis")) {
+        synthesisAttempts++;
+        throw new Error("synthesis transient failure");
+      }
+      return {
+        conclusion: "success",
+        structuredOutput: JSON.stringify({
+          agent_id: inferAgentIdFromExecPath(options.executionFilePath),
+          agent_name: "Agent",
+          summary: "ok",
+          findings: [],
+        }),
+      };
+    };
+
+    const { octokit } = makeOctokit();
+    const { runMultiAgentReview } = await import(
+      "../../../src/modes/review/orchestrator"
+    );
+    const result = await runMultiAgentReview({
+      context: makeContext(),
+      octokit,
+      githubToken: "token",
+      prepareResult: PREPARE_RESULT,
+    });
+
+    expect(result.conclusion).toBe("failure");
+    // Exactly one synthesis attempt — retry would risk duplicate inline
+    // comments since synthesis writes via MCP.
+    expect(synthesisAttempts).toBe(1);
+  });
 });
 
 function inferAgentIdFromExecPath(execPath?: string): string {
