@@ -15,6 +15,10 @@ name: Multi-Agent Review Auto (Test)
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
 
 jobs:
   multi-agent-review-auto:
