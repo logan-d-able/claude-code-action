@@ -1,0 +1,42 @@
+name: Multi-Agent Review Auto (Test)
+
+# TEMPORARY workflow for E2E validation of `multi_agent_review: "auto"`.
+# A zero-tool triage sub-agent decides per-PR whether to run the full
+# multi-agent pipeline or fall back to single-agent review. This workflow
+# runs the action directly from the in-tree checkout (`uses: ./`) so PRs
+# on this branch exercise the local triage logic.
+#
+# Expected behavior on PRs against this branch:
+#   - Docs-only / trivial diff  -> triage routes to "single"
+#   - Security/auth/complex diff -> triage routes to "multi"
+#
+# Remove before merging to main.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  multi-agent-review-auto:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Multi-agent review (auto)
+        uses: ./
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          track_progress: "true"
+          multi_agent_review: "auto"
+          review_debate_rounds: "1"
+          claude_args: |
+            --model "claude-opus-4-7"
