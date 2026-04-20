@@ -199,12 +199,30 @@ async function run() {
     }
 
     // Check trigger conditions
+    //
+    // Multi-agent review auto-fires on every PR event ("true"/"auto") without
+    // requiring the @claude trigger phrase — the whole point of opt-in review
+    // is zero-touch automation. The tag-mode trigger check only applies when
+    // multi-agent review is disabled, in which case the classic "@claude in
+    // body/title/comment" behavior is preserved.
+    const multiAgentAutoTrigger =
+      modeName === "tag" &&
+      isEntityContext(context) &&
+      context.isPR &&
+      isPullRequestEvent(context) &&
+      (context.inputs.multiAgentReview === "true" ||
+        context.inputs.multiAgentReview === "auto");
+
     const containsTrigger =
-      modeName === "tag"
+      multiAgentAutoTrigger ||
+      (modeName === "tag"
         ? isEntityContext(context) && checkContainsTrigger(context)
-        : !!context.inputs?.prompt;
+        : !!context.inputs?.prompt);
     console.log(`Mode: ${modeName}`);
     console.log(`Context prompt: ${context.inputs?.prompt || "NO PROMPT"}`);
+    console.log(
+      `Multi-agent auto-trigger: ${multiAgentAutoTrigger} (multi_agent_review=${context.inputs.multiAgentReview})`,
+    );
     console.log(`Trigger result: ${containsTrigger}`);
 
     if (!containsTrigger) {
