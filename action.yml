@@ -151,7 +151,7 @@ inputs:
     required: false
     default: ""
   multi_agent_review:
-    description: "Enable multi-agent PR review. When 'true' on a pull_request event in tag mode, runs parallel reviewer agents and posts a synthesis comment alongside the standard tracking comment."
+    description: "Enable multi-agent PR review on pull_request events in tag mode. 'true' always runs the full pipeline (parallel reviewers + optional debate + synthesis). 'auto' runs a zero-tool triage sub-agent first that decides per-PR whether to use the full pipeline or fall back to a single-agent review — cheaper for trivial PRs, full safety net for risky ones. 'false' disables. Invalid values coerce to 'false' with a warning."
     required: false
     default: "false"
   review_debate_rounds:

@@ -67,6 +67,29 @@ export const AGENT_FINDINGS_SCHEMA = {
   },
 } as const;
 
+export type TriageDecisionValue = "single" | "multi";
+
+export type TriageDecision = {
+  decision: TriageDecisionValue;
+  reason: string;
+};
+
+export const TRIAGE_SCHEMA = {
+  type: "object",
+  required: ["decision", "reason"],
+  additionalProperties: false,
+  properties: {
+    decision: {
+      type: "string",
+      enum: ["single", "multi"],
+    },
+    reason: {
+      type: "string",
+      maxLength: 500,
+    },
+  },
+} as const;
+
 export const AGENT_REBUTTAL_SCHEMA = {
   type: "object",
   required: ["agent_id", "agent_name", "responses"],

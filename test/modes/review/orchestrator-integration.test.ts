@@ -872,6 +872,90 @@ describe("runMultiAgentReview", () => {
     expect(updateCalls).toHaveLength(0);
   });
 
+  it("preBuiltContextMarkdown skips fetchPullRequestPatches (no double-fetch)", async () => {
+    runClaudeImpl = async (_promptPath, options) => {
+      if (options.executionFilePath?.includes("synthesis")) {
+        return { conclusion: "success" };
+      }
+      return {
+        conclusion: "success",
+        structuredOutput: JSON.stringify({
+          agent_id: inferAgentIdFromExecPath(options.executionFilePath),
+          agent_name: "Agent",
+          summary: "ok",
+          findings: [],
+        }),
+      };
+    };
+
+    const { octokit, listFilesCalls } = makeOctokit();
+    const { runMultiAgentReview } = await import(
+      "../../../src/modes/review/orchestrator"
+    );
+    await runMultiAgentReview({
+      context: makeContext({ multiAgentReview: "auto" }),
+      octokit,
+      githubToken: "token",
+      prepareResult: PREPARE_RESULT,
+      preBuiltContextMarkdown: "## pre-built\n\npre-built context body",
+    });
+
+    // The workers should see the pre-built markdown verbatim inside their
+    // system prompt — no re-fetch should occur.
+    const workerCalls = runClaudeCalls.filter(
+      (c) => !c.options.executionFilePath?.includes("synthesis"),
+    );
+    for (const call of workerCalls) {
+      expect(call.options.appendSystemPrompt).toContain(
+        "pre-built context body",
+      );
+    }
+    // The orchestrator's patch-fetch path calls `octokit.rest.pulls.listFiles`
+    // transitively via `fetchPullRequestPatches` — with preBuilt markdown that
+    // code path must not run.
+    expect(listFilesCalls).toHaveLength(0);
+  });
+
+  it("triageLine is embedded in the initial synthesis comment body", async () => {
+    runClaudeImpl = async (_promptPath, options) => {
+      if (options.executionFilePath?.includes("synthesis")) {
+        return { conclusion: "success" };
+      }
+      return {
+        conclusion: "success",
+        structuredOutput: JSON.stringify({
+          agent_id: inferAgentIdFromExecPath(options.executionFilePath),
+          agent_name: "Agent",
+          summary: "ok",
+          findings: [],
+        }),
+      };
+    };
+
+    const { octokit, createCalls } = makeOctokit();
+    const { runMultiAgentReview } = await import(
+      "../../../src/modes/review/orchestrator"
+    );
+    await runMultiAgentReview({
+      context: makeContext({ multiAgentReview: "auto" }),
+      octokit,
+      githubToken: "token",
+      prepareResult: PREPARE_RESULT,
+      preBuiltContextMarkdown: "ctx",
+      triageLine: "🔀 Triage: multi — touches src/auth",
+    });
+
+    expect(createCalls).toHaveLength(1);
+    expect(createCalls[0]!.body).toContain(
+      "🔀 Triage: multi — touches src/auth",
+    );
+    // Triage line must appear before the running-agents placeholder.
+    const triageIdx = createCalls[0]!.body.indexOf("🔀 Triage");
+    const runningIdx = createCalls[0]!.body.indexOf("Running");
+    expect(triageIdx).toBeGreaterThan(-1);
+    expect(runningIdx).toBeGreaterThan(triageIdx);
+  });
+
   it("synthesis is never retried (non-idempotent GitHub writes)", async () => {
     let synthesisAttempts = 0;
     runClaudeImpl = async (_promptPath, options) => {
